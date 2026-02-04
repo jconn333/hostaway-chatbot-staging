@@ -1,15 +1,25 @@
+// index.js
 import express from "express";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+import pkg from "pg";
+import { getSandboxHtml, getReviewHtml } from "./src/ui.js";
+
+const { Pool } = pkg;
 
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 app.use(express.json());
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+const db = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
 
 /* ===============================
    LISTINGS CACHE
@@ -316,6 +326,19 @@ app.get("/", (req, res) => {
   res.send("Chatbot server is running 🚀");
 });
 
+/* ---------- SANDBOX UI ---------- */
+app.get("/sandbox", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(getSandboxHtml());
+});
+
+/* ---------- REVIEW UI ---------- */
+
+app.get("/review", (req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(getReviewHtml());
+});
+
 /* ---------- HOSTAWAY DEBUG ---------- */
 app.get("/hostaway/test", async (req, res) => {
   try {
@@ -366,21 +389,20 @@ app.get("/hostaway/availability/:id", async (req, res) => {
     const tokenData = await getHostawayAccessToken();
     const accessToken = tokenData.access_token;
 
-    // Treat `end` as checkout date (not a night stayed).
-// So we query calendar through end-1 day.
-const endForCalendar = addDays(end, -1);
+    // Treat `end` as checkout date (not a night stayed). Query calendar through end-1 day.
+    const endForCalendar = addDays(end, -1);
 
-// If someone passes the same day for start/end, there's no stay to check.
-if (endForCalendar < start) {
-  return res.status(400).json({
-    ok: false,
-    error: "End date must be after start date (checkout after check-in).",
-  });
-}
+    // If someone passes the same day for start/end, there's no stay to check.
+    if (endForCalendar < start) {
+      return res.status(400).json({
+        ok: false,
+        error: "End date must be after start date (checkout after check-in).",
+      });
+    }
 
-const url =
-  `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
-  `?startDate=${start}&endDate=${endForCalendar}`;
+    const url =
+      `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
+      `?startDate=${start}&endDate=${endForCalendar}`;
 
     const resp = await fetch(url, {
       method: "GET",
@@ -397,6 +419,7 @@ const url =
 
     const data = await resp.json();
     const days = data?.result || [];
+
     const summary = summarizeAvailabilityWithAlternatives(days, start, end);
 
     res.json({
@@ -448,10 +471,34 @@ app.post("/chat", async (req, res) => {
     // If availability question AND user gave dates -> answer from Hostaway truth
     const dates = extractDates(userMessage);
     if (dates && isAvailabilityQuestion(userMessage)) {
-      const resp = await fetch(
-        `http://localhost:${PORT}/hostaway/availability/${listingId}?start=${dates.start}&end=${dates.end}`
-      );
-      const data = await resp.json();
+      const endForCalendar = addDays(dates.end, -1);
+
+      if (endForCalendar < dates.start) {
+        return res.json({
+          reply: "End date must be after start date (checkout after check-in).",
+        });
+      }
+
+      const url =
+        `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
+        `?startDate=${dates.start}&endDate=${endForCalendar}`;
+
+      const calResp = await fetch(url, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Cache-control": "no-cache",
+        },
+      });
+
+      if (!calResp.ok) {
+        const text = await calResp.text();
+        throw new Error(`Availability failed (${calResp.status}): ${text}`);
+      }
+
+      const calData = await calResp.json();
+      const days = calData?.result || [];
+      const data = summarizeAvailabilityWithAlternatives(days, dates.start, dates.end);
 
       // Fetch safe listing to get stable bookingUrl
       const listingResp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
@@ -510,6 +557,111 @@ app.post("/chat", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ reply: "Something went wrong on the server." });
+  }
+});
+
+/* ---------- FEEDBACK (thumbs-only; no numeric rating) ---------- */
+app.post("/feedback", async (req, res) => {
+  try {
+    const { testerName, pageUrl, listingId, userMessage, botReply, thumbs, feedback } = req.body;
+
+    if (!userMessage || !botReply) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing userMessage or botReply",
+      });
+    }
+
+    await db.query(
+      `
+      insert into chat_feedback
+        (tester_name, page_url, listing_id, user_message, bot_reply, rating, thumbs, feedback)
+      values
+        ($1, $2, $3, $4, $5, $6, $7, $8)
+      `,
+      [
+        testerName || null,
+        pageUrl || null,
+        listingId || null,
+        userMessage,
+        botReply,
+        null, // rating (thumbs-only)
+        thumbs || null,
+        feedback || null,
+      ]
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Feedback error:", err);
+    res.status(500).json({ ok: false, error: "Failed to save feedback" });
+  }
+});
+
+/* ---------- FEEDBACK (RECENT) ---------- */
+/**
+ * Example:
+ *   /feedback/recent
+ *   /feedback/recent?limit=50
+ *   /feedback/recent?limit=50&thumbs=up
+ *   /feedback/recent?listingId=214120
+ *   /feedback/recent?tester=Jeff
+ */
+app.get("/feedback/recent", async (req, res) => {
+  try {
+    const limitRaw = Number(req.query.limit || 50);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
+
+    const thumbs = (req.query.thumbs || "").toString().trim().toLowerCase(); // "up" or "down" or ""
+    const listingIdRaw = (req.query.listingId || "").toString().trim();
+    const tester = (req.query.tester || "").toString().trim();
+
+    const where = [];
+    const params = [];
+    let i = 1;
+
+    if (thumbs === "up" || thumbs === "down") {
+      where.push(`thumbs = $${i++}`);
+      params.push(thumbs);
+    }
+
+    if (listingIdRaw && !Number.isNaN(Number(listingIdRaw))) {
+      where.push(`listing_id = $${i++}`);
+      params.push(Number(listingIdRaw));
+    }
+
+    if (tester) {
+      where.push(`tester_name ILIKE $${i++}`);
+      params.push(`%${tester}%`);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    // NOTE: This query works whether or not you still have a "rating" column.
+    const sql = `
+      SELECT
+        id,
+        created_at,
+        tester_name,
+        page_url,
+        listing_id,
+        user_message,
+        bot_reply,
+        thumbs,
+        feedback
+      FROM chat_feedback
+      ${whereSql}
+      ORDER BY created_at DESC
+      LIMIT $${i++}
+    `;
+
+    params.push(limit);
+
+    const result = await db.query(sql, params);
+    res.json({ ok: true, rows: result.rows });
+  } catch (err) {
+    console.error("Recent feedback error:", err);
+    res.status(500).json({ ok: false, error: "Failed to load feedback" });
   }
 });
 
