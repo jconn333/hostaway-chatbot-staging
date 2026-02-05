@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feature/testing]
+
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    env:
+      HOSTAWAY_ACCOUNT_ID: ${{ secrets.HOSTAWAY_ACCOUNT_ID }}
+      HOSTAWAY_API_KEY: ${{ secrets.HOSTAWAY_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run golden
