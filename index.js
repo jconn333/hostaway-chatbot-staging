@@ -278,7 +278,7 @@ function extractCapacityQuery(message) {
 function policyAnswerFromHouseRules(safe, intent) {
   // Global policies (company-wide)
   if (intent === "smoking") {
-    return "Smoking isn’t allowed at any of our units.";
+    return "Smoking isn’t allowed at any of our units (non‑smoking).";
   }
   if (intent === "parties") {
     return "Parties and events aren’t allowed at any of our units.";

@@ -180,5 +180,54 @@
     "message": "Can I reserve Red Fern for next weekend?",
     "expectOneOfIncludes": ["Book now:", "availability"],
     "expectRegex": []
+  },
+  {
+    "name": "availability-tonight",
+    "sessionId": "golden-edge",
+    "message": "Is Red Fern available tonight?",
+    "expectIncludes": ["Book now:"],
+    "expectRegex": ["Check.?in"]
+  },
+  {
+    "name": "availability-tomorrow",
+    "sessionId": "golden-edge",
+    "message": "Is Red Fern available tomorrow night?",
+    "expectIncludes": ["Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "availability-3-nights",
+    "sessionId": "golden-edge",
+    "message": "Can I book Joy Lodge Suite for 3 nights starting Feb 10?",
+    "expectIncludes": ["2026-02-10", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "availability-2-nights-phrased",
+    "sessionId": "golden-edge",
+    "message": "Need Joy Lodge Suite Feb 12 for two nights — available?",
+    "expectIncludes": ["2026-02-12", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "policy-pets-followup",
+    "sessionId": "golden-policy",
+    "message": "Do you allow dogs?",
+    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets aren’t allowed"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-jetted-tub",
+    "sessionId": "golden-amenity-syn",
+    "message": "Does Red Fern have a jetted tub?",
+    "expectOneOfIncludes": ["Red Fern Cabin", "jetted tub", "jacuzzi", "hot tub"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-hot-tub-inventory",
+    "sessionId": "golden-amenities",
+    "message": "Which units have hot tubs?",
+    "expectIncludes": ["Units with"],
+    "expectRegex": []
   }
 ]
