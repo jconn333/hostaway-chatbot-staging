@@ -28,10 +28,31 @@
     "expectRegex": []
   },
   {
+    "name": "pet-policy-generic",
+    "sessionId": "golden-policy",
+    "message": "Do you allow pets?",
+    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets are allowed"],
+    "expectRegex": []
+  },
+  {
     "name": "pet-friendly-suites",
     "sessionId": "golden-pets",
     "message": "Which suites are pet friendly?",
     "expectIncludes": ["Units with", "Suite"],
+    "expectRegex": []
+  },
+  {
+    "name": "multi-constraint-amenity",
+    "sessionId": "golden-amenities",
+    "message": "Which cabins have fireplaces and hot tubs?",
+    "expectIncludes": ["Units with"],
+    "expectRegex": []
+  },
+  {
+    "name": "multi-constraint-pet-amenity",
+    "sessionId": "golden-amenities",
+    "message": "Which units are pet friendly and have a hot tub?",
+    "expectIncludes": ["Units with"],
     "expectRegex": []
   },
   {

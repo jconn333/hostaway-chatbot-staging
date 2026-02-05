@@ -45,6 +45,9 @@ export function suggestUnits(message, listings) {
 ================================ */
 export function findListingIdFromMessage(message, listings) {
   const msg = (message || "").toLowerCase();
+  const pluralUnitWords = /\b(cabins|units|suites|lodges|places|properties|rentals|listings)\b/.test(
+    msg
+  );
   const candidates = [];
 
   for (const l of listings) {
@@ -70,6 +73,10 @@ export function findListingIdFromMessage(message, listings) {
     if (msg.includes(c.nameLower)) return c.id;
   }
 
+  if (pluralUnitWords) {
+    return null;
+  }
+
   // Nickname/partial match: most meaningful words (>=3 chars) present
   for (const c of candidates) {
     const words = c.nameLower.split(/\s+/).filter((w) => w.length >= 3);
@@ -84,6 +91,33 @@ export function findListingIdFromMessage(message, listings) {
     if (hits >= Math.max(2, Math.ceil(words.length * 0.6))) {
       return c.id;
     }
+  }
+
+  return null;
+}
+
+export function findListingIdFromMessageStrong(message, listings) {
+  const msg = (message || "").toLowerCase();
+  const candidates = [];
+
+  for (const l of listings) {
+    const names = [l.name, l.internalListingName, l.externalListingName, l.airbnbName]
+      .filter((n) => n != null)
+      .map((n) => String(n).trim())
+      .filter((n) => n.length >= 4);
+
+    for (const name of names) {
+      candidates.push({
+        id: l.id,
+        nameLower: name.toLowerCase(),
+        length: name.length,
+      });
+    }
+  }
+
+  candidates.sort((a, b) => b.length - a.length);
+  for (const c of candidates) {
+    if (msg.includes(c.nameLower)) return c.id;
   }
 
   return null;

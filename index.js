@@ -20,7 +20,11 @@ import {
   fetchListingById,
   fetchCalendarRange,
 } from "./src/lib/hostaway.js";
-import { suggestUnits, findListingIdFromMessage } from "./src/lib/listings.js";
+import {
+  suggestUnits,
+  findListingIdFromMessage,
+  findListingIdFromMessageStrong,
+} from "./src/lib/listings.js";
 import { createHostawayRouter } from "./src/routes/hostaway.js";
 import {
   detectAmenityQuery,
@@ -197,6 +201,7 @@ function renderStructuredReply(data) {
 
 function detectPolicyIntent(message) {
   const msg = (message || "").toLowerCase();
+  if (msg.includes("pet")) return "pets";
   if (/\b(pet|pets|dog|dogs|cat|cats)\b/.test(msg)) return "pets";
   if (/\b(smok|smoking|cigarette|vape)\b/.test(msg)) return "smoking";
   if (/\b(party|parties|events|gathering)\b/.test(msg)) return "parties";
@@ -495,6 +500,13 @@ app.post("/chat", async (req, res) => {
     const sessionId = req.body.sessionId || req.headers["x-session-id"] || null;
     const session = sessionId ? getSession(sessionId) : null;
     let memoryNote = "";
+    const debugEnabled =
+      req.query?.debug === "1" || String(req.headers["x-debug"] || "") === "1";
+    const setDebugHeader = (key, value) => {
+      if (!debugEnabled) return;
+      if (value == null) return;
+      res.setHeader(`X-Debug-${key}`, String(value));
+    };
     const followupAmenityKey =
       looksLikeFollowupQuestion(userMessage) && session?.lastAmenityKey
         ? session.lastAmenityKey
@@ -505,6 +517,9 @@ app.post("/chat", async (req, res) => {
         : null;
     const intent = await classifyIntent(userMessage);
     setSession(sessionId, { lastIntent: intent.intent });
+    setDebugHeader("Intent", intent.intent);
+    const policyIntentRaw = detectPolicyIntent(userMessage);
+    setDebugHeader("PolicyIntent", policyIntentRaw);
     const earlyAmenityIntent = detectAmenityKeyLoose(userMessage);
     let inventoryIntent =
       isInventoryQuery(userMessage) ||
@@ -512,6 +527,7 @@ app.post("/chat", async (req, res) => {
     if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(userMessage)) {
       inventoryIntent = false;
     }
+    setDebugHeader("InventoryIntent", inventoryIntent);
 
     const tokenData = await getHostawayAccessToken();
     const accessToken = tokenData.access_token;
@@ -595,7 +611,9 @@ app.post("/chat", async (req, res) => {
     // Detect listing from message if not explicitly provided
     if (!listingId) {
       const amenityIntent = detectAmenityQuery(userMessage);
-      const detected = findListingIdFromMessage(userMessage, listings);
+      const detected = inventoryIntent
+        ? findListingIdFromMessageStrong(userMessage, listings)
+        : findListingIdFromMessage(userMessage, listings);
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });
@@ -621,6 +639,7 @@ app.post("/chat", async (req, res) => {
         }
       }
     }
+    setDebugHeader("ListingId", listingId);
 
     // ---------- INVENTORY-WIDE AVAILABILITY QUESTIONS ----------
     if (
@@ -632,6 +651,9 @@ app.post("/chat", async (req, res) => {
       let dates = extractDates(userMessage);
       if (!dates && followupInventory?.type === "availability" && followupInventory?.dates) {
         dates = followupInventory.dates;
+      }
+      if (dates) {
+        setDebugHeader("Dates", `${dates.start}..${dates.end}`);
       }
       if (!dates) {
         return res.json({
@@ -777,6 +799,11 @@ app.post("/chat", async (req, res) => {
       let amenityKeys = detectAmenityKeys(userMessage);
       let unitType = detectUnitType(userMessage);
       let wantsPetFriendly = detectPetFriendlyFilter(userMessage);
+      const looksLikeListRequest = /\b(which|what|list|show|any)\b/.test(
+        (userMessage || "").toLowerCase()
+      );
+      const skipAmenityInventory =
+        policyIntentRaw === "pets" && !looksLikeListRequest && !amenityKeys.length && !unitType;
 
       if (followupInventory?.type === "amenity") {
         if (!amenityKeys.length && followupInventory.amenityKeys) {
@@ -799,7 +826,13 @@ app.post("/chat", async (req, res) => {
         unitType ||
         intent.intent === "amenity_inventory"
       ) {
+        if (!skipAmenityInventory && (looksLikeListRequest || amenityKeys.length || unitType || intent.intent === "amenity_inventory")) {
         const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
+        if (effectiveAmenityKeys.length) {
+          setDebugHeader("AmenityKeys", effectiveAmenityKeys.join(","));
+        }
+        if (unitType) setDebugHeader("UnitType", unitType);
+        if (wantsPetFriendly) setDebugHeader("PetFriendly", "true");
         setSession(sessionId, {
           lastAmenityKey: amenityKey || effectiveAmenityKeys[0] || null,
           lastInventory: {
@@ -857,12 +890,13 @@ app.post("/chat", async (req, res) => {
         return res.json({
           reply: `Units with${label}:\n\n${lines}`,
         });
+        }
       }
     }
 
     // If we still don't have a listing, try inventory-wide policy answer
     if (!listingId) {
-      let policyIntent = detectPolicyIntent(userMessage);
+      let policyIntent = policyIntentRaw;
       if (
         !policyIntent &&
         !followupAmenityKey &&
