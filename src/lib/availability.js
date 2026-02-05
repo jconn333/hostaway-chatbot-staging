@@ -4,6 +4,103 @@ export function isAvailabilityQuestion(message) {
   return /available|availability|open|vacancy|booked|reserve/i.test(message || "");
 }
 
+export function isInventoryAvailabilityQuestion(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\b(which|what|any|show me|list)\b/.test(msg) &&
+    /\b(available|availability|open|vacancy)\b/.test(msg)
+  );
+}
+
+export function getTodayIso(timeZone = "America/New_York") {
+  return isoDateInTimeZoneDaysFromNow(timeZone, 0);
+}
+
+export function findNextAvailableWeekend(calendarDays, startDate, lookaheadDays = 180) {
+  const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
+  const byDate = new Map(daysArr.map((d) => [d.date, d]));
+
+  const isAvailableNight = (d) =>
+    !d || (d.isAvailable !== 0 && d.status !== "reserved");
+
+  const isArrivalOk = (d) => !d || d.closedOnArrival !== 1;
+  const isDepartureOk = (d) => !d || d.closedOnDeparture !== 1;
+
+  for (let i = 0; i <= lookaheadDays; i++) {
+    const friday = addDays(startDate, i);
+    if (weekdayOfIso(friday) !== 5) continue; // Friday
+
+    const saturday = addDays(friday, 1);
+    const sunday = addDays(friday, 2);
+    const monday = addDays(friday, 3);
+
+    const dayFri = byDate.get(friday);
+    const daySat = byDate.get(saturday);
+    const daySun = byDate.get(sunday);
+    const dayMon = byDate.get(monday);
+
+    if (!isAvailableNight(dayFri) || !isAvailableNight(daySat)) continue;
+    if (!isArrivalOk(dayFri)) continue;
+    if (daySun && !isDepartureOk(daySun)) continue;
+    const minStay = dayFri?.minimumStay || daySat?.minimumStay || 2;
+
+    if (minStay <= 2) {
+      return { start: friday, end: sunday, minStay: 2, suggestedEnd: null };
+    }
+
+    // Weekend is open but requires longer stay
+    // Suggest a 3-night Fri–Mon if available
+    const canExtend =
+      isAvailableNight(daySun) &&
+      isAvailableNight(dayMon) &&
+      isDepartureOk(dayMon);
+    const suggestedEnd = canExtend ? monday : null;
+    return { start: friday, end: sunday, minStay, suggestedEnd };
+  }
+
+  return null;
+}
+
+export function explainWeekendSearch(calendarDays, startDate, lookaheadDays = 180) {
+  const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
+  const byDate = new Map(daysArr.map((d) => [d.date, d]));
+  const notes = [];
+
+  const isAvailableNight = (d) =>
+    !d || (d.isAvailable !== 0 && d.status !== "reserved");
+  const isArrivalOk = (d) => !d || d.closedOnArrival !== 1;
+  const isDepartureOk = (d) => !d || d.closedOnDeparture !== 1;
+
+  let checked = 0;
+  for (let i = 0; i <= lookaheadDays; i++) {
+    const friday = addDays(startDate, i);
+    if (weekdayOfIso(friday) !== 5) continue;
+    const saturday = addDays(friday, 1);
+    const sunday = addDays(friday, 2);
+    const dayFri = byDate.get(friday);
+    const daySat = byDate.get(saturday);
+    const daySun = byDate.get(sunday);
+    checked += 1;
+    if (notes.length < 10) {
+      notes.push(
+        `${friday}: Fri avail=${dayFri?.isAvailable} status=${dayFri?.status} arrival=${dayFri?.closedOnArrival} minStay=${dayFri?.minimumStay}; ` +
+          `Sat ${saturday} avail=${daySat?.isAvailable} status=${daySat?.status} minStay=${daySat?.minimumStay}; ` +
+          `Sun ${sunday} depart=${daySun?.closedOnDeparture} minStay=${daySun?.minimumStay}`
+      );
+    }
+    if (!isAvailableNight(dayFri) || !isAvailableNight(daySat)) continue;
+    if (!isArrivalOk(dayFri)) continue;
+    if (!isDepartureOk(daySun)) continue;
+    if (dayFri.minimumStay && dayFri.minimumStay > 2) continue;
+  }
+
+  return {
+    daysFetched: daysArr.length,
+    fridaysChecked: checked,
+    samples: notes,
+  };
+}
+
 export function addDays(dateStr, deltaDays) {
   const [y, m, d] = dateStr.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -52,6 +149,14 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
     suggestion = ` It is available starting ${nextAvailable.date} for a minimum stay of ${minStay}.`;
   }
 
+  if (day?.status === "reserved") {
+    return {
+      available: false,
+      suggestedStart,
+      message: `No — this unit is already booked on ${day.date}.` + suggestion,
+    };
+  }
+
   if (day?.minimumStay && day.minimumStay > 1) {
     return {
       available: false,
@@ -75,14 +180,6 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
       available: false,
       suggestedStart,
       message: `No — check-out is not allowed on ${day.date} for this unit.` + suggestion,
-    };
-  }
-
-  if (day?.status === "reserved") {
-    return {
-      available: false,
-      suggestedStart,
-      message: `No — this unit is already booked on ${day.date}.` + suggestion,
     };
   }
 
@@ -185,6 +282,12 @@ function isoDateInTimeZoneDaysFromNow(timeZone, offsetDays) {
   const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(base.getUTCDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+function weekdayOfIso(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCDay();
 }
 
 // weekdayIndex: 0=Sun ... 6=Sat

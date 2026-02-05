@@ -30,7 +30,7 @@ export function createHostawayRouter() {
     try {
       const tokenData = await getHostawayAccessToken();
       const listing = await fetchListingById(req.params.id, tokenData.access_token);
-      res.json({ ok: true, safe: toSafeListingFacts(listing) });
+      res.json({ ok: true, safe: toSafeListingFacts(listing, { audience: "postbooking" }) });
     } catch (err) {
       res.status(500).json({ ok: false, error: err.message });
     }

@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "smoke": "node scripts/smoke.js",
-    "smoke:terminal": "./scripts/terminal-smoke.sh"
+    "smoke:terminal": "./scripts/terminal-smoke.sh",
+    "dev": "node scripts/dev-watch.js"
   },
   "keywords": [],
   "author": "",

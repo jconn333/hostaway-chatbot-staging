@@ -160,6 +160,13 @@ export function getSandboxHtml() {
       white-space: pre-wrap;
       line-height: 1.35;
     }
+    .bubble a{
+      color: #93c5fd;
+      text-decoration: none;
+    }
+    .bubble a:hover{
+      color: #bfdbfe;
+    }
     .me{ align-self:flex-end; background: rgba(96,165,250,.14); border-color: rgba(96,165,250,.25); }
     .bot{ align-self:flex-start; background: rgba(255,255,255,.05); }
     .metaRow{
@@ -228,7 +235,7 @@ export function getSandboxHtml() {
     <div class="topbar">
       <div class="title">
         <h1>Chatbot Sandbox</h1>
-        <div class="sub">Private tester page to evaluate responses, add notes, and improve quality before going live.</div>
+      <div class="sub">Private tester page to evaluate responses, add notes, and improve quality before going live. (dev)</div>
       </div>
       <div class="pill" title="This is your staging environment (Render).">
         <span>🧪</span><strong>Staging</strong>
@@ -259,6 +266,16 @@ export function getSandboxHtml() {
           </div>
 
           <div style="margin-top:12px;">
+            <label>Session ID</label>
+            <input id="sessionId" placeholder="auto-generated if blank" />
+            <div class="metaRow">
+              <div class="smallNote">
+                🔁 Used to remember the unit and dates across turns
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-top:12px;">
             <label>Message</label>
             <textarea id="question" placeholder="Ask a real guest question. Example: “Is the Joy Suite available from 2026-03-24 to 2026-03-26?”"></textarea>
             <div class="metaRow">
@@ -271,6 +288,7 @@ export function getSandboxHtml() {
 
           <div class="toolbar">
             <button class="btn primary" id="sendBtn" title="Send your question to the bot.">➡️ Send</button>
+            <button class="btn mini" id="resetSessionBtn" title="Generate a new session ID for memory isolation.">🔁 Reset session</button>
             <span class="badge" id="sendStatus">Ready</span>
           </div>
 
@@ -332,9 +350,11 @@ export function getSandboxHtml() {
   const chat = el("chat");
   const testerName = el("testerName");
   const listingId = el("listingId");
+  const sessionId = el("sessionId");
   const question = el("question");
   const sendBtn = el("sendBtn");
   const clearBtn = el("clearBtn");
+  const resetSessionBtn = el("resetSessionBtn");
   const sendStatus = el("sendStatus");
   const apiStatus = el("apiStatus");
 
@@ -357,8 +377,32 @@ export function getSandboxHtml() {
   const savedName = localStorage.getItem("sandboxTesterName");
   if (savedName) testerName.value = savedName;
 
+  function generateSessionId(){
+    if (crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    return "sess-" + Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  const savedSessionId = localStorage.getItem("sandboxSessionId");
+  if (savedSessionId) {
+    sessionId.value = savedSessionId;
+  } else {
+    sessionId.value = generateSessionId();
+    localStorage.setItem("sandboxSessionId", sessionId.value.trim());
+  }
+
   testerName.addEventListener("input", () => {
     localStorage.setItem("sandboxTesterName", testerName.value.trim());
+  });
+
+  sessionId.addEventListener("input", () => {
+    localStorage.setItem("sandboxSessionId", sessionId.value.trim());
+  });
+
+  resetSessionBtn.addEventListener("click", () => {
+    const sid = generateSessionId();
+    sessionId.value = sid;
+    localStorage.setItem("sandboxSessionId", sid);
+    toastShow("Session reset", "New session ID generated.");
   });
 
   question.addEventListener("input", () => {
@@ -372,14 +416,58 @@ export function getSandboxHtml() {
     setTimeout(() => { toast.style.display = "none"; }, 2400);
   }
 
- function addBubble(text, who){
-  const div = document.createElement("div");
-  div.className = "bubble " + (who === "me" ? "me" : "bot");
-  div.textContent = text;
-  chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
-  return div; // ✅ IMPORTANT: allows typing bubble to be updated later
-}
+  function escapeHtml(s){
+    return (s || "").replace(/[&<>"']/g, (c) => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+    }[c]));
+  }
+
+  function formatBotText(text){
+    const s = text || "";
+    let out = "";
+    let i = 0;
+    while (i < s.length) {
+      const open = s.indexOf("[", i);
+      if (open === -1) {
+        out += escapeHtml(s.slice(i));
+        break;
+      }
+      const mid = s.indexOf("](", open + 1);
+      const close = mid !== -1 ? s.indexOf(")", mid + 2) : -1;
+      if (mid === -1 || close === -1) {
+        out += escapeHtml(s.slice(i));
+        break;
+      }
+      out += escapeHtml(s.slice(i, open));
+      const label = s.slice(open + 1, mid);
+      const url = s.slice(mid + 2, close);
+      if (url.startsWith("http://") || url.startsWith("https://")) {
+        out +=
+          '<a href="' +
+          escapeHtml(url) +
+          '" target="_blank" rel="noopener noreferrer">' +
+          escapeHtml(label) +
+          "</a>";
+      } else {
+        out += escapeHtml(s.slice(open, close + 1));
+      }
+      i = close + 1;
+    }
+    return out;
+  }
+
+  function addBubble(text, who){
+    const div = document.createElement("div");
+    div.className = "bubble " + (who === "me" ? "me" : "bot");
+    if (who === "bot") {
+      div.innerHTML = formatBotText(text);
+    } else {
+      div.textContent = text;
+    }
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div; // ✅ IMPORTANT: allows typing bubble to be updated later
+  }
  
 function setTypingBubble(div, isTyping){
   if (!div) return;
@@ -459,12 +547,21 @@ function setTypingBubble(div, isTyping){
   resetFeedbackUI();
 
   addBubble(msg, "me");
+  question.value = "";
+  charCount.textContent = "0 chars";
   setSending(true);
   setFeedbackEnabled(false);
 
   try{
     const payload = { message: msg };
     if (Number.isFinite(lid)) payload.listingId = lid;
+    let sid = (sessionId.value || "").trim();
+    if (!sid){
+      sid = generateSessionId();
+      sessionId.value = sid;
+      localStorage.setItem("sandboxSessionId", sid);
+    }
+    payload.sessionId = sid;
 
     const res = await fetch("/chat", {
       method: "POST",
@@ -702,6 +799,9 @@ export function getReviewHtml() {
       </div>
       <div class="mono">Tip: open <strong>/sandbox</strong> in another tab to test live.</div>
     </div>
+    <div class="bar" style="margin-bottom: 10px;">
+      <div class="stats" id="sessionHint">Session ID: loading…</div>
+    </div>
 
     <div class="bar">
       <div>
@@ -750,6 +850,12 @@ export function getReviewHtml() {
   const loadBtn = el("loadBtn");
   const list = el("list");
   const stats = el("stats");
+  const sessionHint = el("sessionHint");
+
+  (function initSessionHint(){
+    const sid = localStorage.getItem("sandboxSessionId");
+    sessionHint.textContent = sid ? "Session ID: " + sid : "Session ID: (none saved)";
+  })();
 
   function esc(s){
     return (s || "").replace(/[&<>"']/g, c => ({
