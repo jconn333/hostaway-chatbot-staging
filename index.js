@@ -706,6 +706,9 @@ app.post("/chat", async (req, res) => {
       if (!dates && followupInventory?.type === "availability" && followupInventory?.dates) {
         dates = followupInventory.dates;
       }
+      const unitType =
+        detectUnitType(userMessage) || (followupInventory?.type === "availability" ? followupInventory.unitType : null);
+      if (unitType) setDebugHeader("UnitType", unitType);
       if (dates) {
         setDebugHeader("Dates", `${dates.start}..${dates.end}`);
       }
@@ -723,8 +726,15 @@ app.post("/chat", async (req, res) => {
         });
       }
 
+      setSession(sessionId, { lastInventory: { type: "availability", dates, unitType } });
+      const sourceListings = unitType
+        ? listings.filter((l) =>
+            String(l.name || "").toLowerCase().includes(unitType)
+          )
+        : listings;
+
       const results = await mapWithConcurrency(
-        listings,
+        sourceListings,
         INVENTORY_AVAILABILITY_CONCURRENCY,
         async (l) => {
           try {
@@ -745,8 +755,19 @@ app.post("/chat", async (req, res) => {
 
       const lines = results.filter(Boolean);
       if (lines.length === 0) {
+        const typeLabel = unitType ? ` ${unitType}s` : "";
+        logEvent("inventory_availability_response", {
+          sessionId: sessionId || "anonymous",
+          start: dates.start,
+          end: dates.end,
+          unitType: unitType || null,
+          availableCount: 0,
+        });
         return res.json({
-          reply: `I didn’t find any available units for ${dates.start} to ${dates.end}.`,
+          reply: appendFollowupIfMissing(
+            `I didn’t find any available${typeLabel} for ${dates.start} to ${dates.end}.`,
+            "Want me to check other dates or unit types?"
+          ),
         });
       }
 
@@ -758,8 +779,19 @@ app.post("/chat", async (req, res) => {
         lastInventory: { type: "availability", dates },
       });
 
+      const label = unitType ? ` (${unitType}s)` : "";
+      logEvent("inventory_availability_response", {
+        sessionId: sessionId || "anonymous",
+        start: dates.start,
+        end: dates.end,
+        unitType: unitType || null,
+        availableCount: shown.length,
+      });
       return res.json({
-        reply: `Available units for ${dates.start} to ${dates.end}:\n\n${shown.join("\n")}${more}`,
+        reply: appendFollowupIfMissing(
+          `Available units for ${dates.start} to ${dates.end}${label}:\n\n${shown.join("\n")}${more}`,
+          "Want me to check other dates or unit types?"
+        ),
       });
     }
 
@@ -798,6 +830,11 @@ app.post("/chat", async (req, res) => {
       const secondarySafe = toSafeListingFacts(secondaryFull, { audience: "postbooking" });
 
       if (intent.intent === "compare" && !looksLikeProximityQuery(userMessage)) {
+        logEvent("compare_response", {
+          sessionId: sessionId || "anonymous",
+          primaryId,
+          secondaryId,
+        });
         return res.json({ reply: buildComparison(primarySafe, secondarySafe) });
       }
 
@@ -840,6 +877,11 @@ app.post("/chat", async (req, res) => {
         locationLine = `They appear to be in different locations: ${displayPrimary.name} is in ${aLoc || "an unknown location"}, and ${displaySecondary.name} is in ${bLoc || "an unknown location"}. I don’t have exact distance data between units.`;
       }
 
+      logEvent("proximity_response", {
+        sessionId: sessionId || "anonymous",
+        primaryId: displayPrimary?.id || primaryId,
+        secondaryId: displaySecondary?.id || secondaryId,
+      });
       return res.json({
         reply:
           `${locationLine}\n\n` +

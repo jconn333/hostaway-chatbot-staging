@@ -229,5 +229,33 @@
     "message": "Which units have hot tubs?",
     "expectIncludes": ["Units with"],
     "expectRegex": []
+  },
+  {
+    "name": "proximity-question",
+    "sessionId": "golden-proximity",
+    "message": "Is Red Fern close to Water Lily Cabin?",
+    "expectOneOfIncludes": ["miles apart", "same location", "different locations"],
+    "expectRegex": []
+  },
+  {
+    "name": "comparison-question",
+    "sessionId": "golden-compare",
+    "message": "Compare Red Fern Cabin and Water Lily Cabin.",
+    "expectOneOfIncludes": ["Key differences", "Red Fern Cabin", "Water Lily Cabin"],
+    "expectRegex": []
+  },
+  {
+    "name": "inventory-suites-tonight",
+    "sessionId": "golden-edge",
+    "message": "Which suites are available tonight?",
+    "expectOneOfIncludes": ["(suites)", "Available units"],
+    "expectRegex": []
+  },
+  {
+    "name": "inventory-cabins-range",
+    "sessionId": "golden-edge",
+    "message": "Which cabins are available Feb 7 to Feb 9?",
+    "expectOneOfIncludes": ["(cabins)", "Available units", "didn’t find any available units", "available cabins"],
+    "expectRegex": []
   }
 ]
