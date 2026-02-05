@@ -8,24 +8,30 @@ const AMENITY_SYNONYMS = [
 ];
 
 export function detectAmenityQuery(message) {
+  const keys = detectAmenityKeys(message);
+  return keys.length ? keys[0] : null;
+}
+
+export function detectAmenityKeys(message) {
   const msg = (message || "").toLowerCase();
 
   // simple phrasing patterns
-  const looksLikeQuery = /\b(which|what|any|do any|show me|list)\b/.test(msg);
-  const inventoryWords = /\b(units|cabins|suites|lodges|places|properties|rentals|listings)\b/.test(msg);
+  const looksLikeQuery = /\b(which|what|any|do any|show me|list|with)\b/.test(msg);
+  const inventoryWords = /\b(units|cabins|suites|lodges|places|properties|rentals|listings)\b/.test(
+    msg
+  );
+  const broadQuery = looksLikeQuery || inventoryWords;
 
-  // Allow even if they don’t say “units”
-  const broadQuery = looksLikeQuery;
-
+  const keys = new Set();
   for (const a of AMENITY_SYNONYMS) {
     for (const p of a.patterns) {
-      if (msg.includes(p) && (looksLikeQuery || inventoryWords || broadQuery)) {
-        return a.key; // canonical amenity key
+      if (msg.includes(p) && broadQuery) {
+        keys.add(a.key);
       }
     }
   }
 
-  return null;
+  return [...keys];
 }
 
 export function hasAmenity(safeListing, amenityKey) {

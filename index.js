@@ -22,7 +22,7 @@ import {
 } from "./src/lib/hostaway.js";
 import { suggestUnits, findListingIdFromMessage } from "./src/lib/listings.js";
 import { createHostawayRouter } from "./src/routes/hostaway.js";
-import { detectAmenityQuery, hasAmenity } from "./src/lib/inventory.js";
+import { detectAmenityQuery, detectAmenityKeys, hasAmenity } from "./src/lib/inventory.js";
 import { fetchListingByIdCached } from "./src/lib/hostaway.js";
 
 const { Pool } = pkg;
@@ -204,6 +204,9 @@ function detectPolicyIntent(message) {
 
 function isPetFriendlyListRequest(message) {
   const msg = (message || "").toLowerCase();
+  const hasOtherAmenities = detectAmenityKeys(msg).length > 0;
+  const hasUnitType = detectUnitType(msg);
+  if (hasOtherAmenities || hasUnitType) return false;
   return (
     /\b(which|what|list|show)\b/.test(msg) &&
     /\b(pet|pets|pet[- ]friendly|dogs|cats)\b/.test(msg)
@@ -368,6 +371,24 @@ function formatAmenityList(amenities, limit = 8) {
   return list.length > limit ? `${shown}…` : shown;
 }
 
+function formatCheckTimes(safe) {
+  const ci = [safe.checkInStart, safe.checkInEnd].filter(Boolean).join("–");
+  const co = safe.checkOut ? `Check‑out ${safe.checkOut}` : "";
+  if (!ci && !co) return "";
+  return `Check‑in ${ci || "time varies"}${co ? `, ${co}` : ""}.`;
+}
+
+function detectUnitType(message) {
+  const msg = (message || "").toLowerCase();
+  const types = ["treehouse", "cabin", "suite", "lodge", "cottage", "tiny home"];
+  return types.find((t) => msg.includes(t)) || null;
+}
+
+function detectPetFriendlyFilter(message) {
+  const msg = (message || "").toLowerCase();
+  return /\bpet[- ]?friendly\b|\bpets? allowed\b|\ballow(s)? pets\b/.test(msg);
+}
+
 function buildComparison(primarySafe, secondarySafe) {
   const lines = [];
   const diffs = [];
@@ -473,6 +494,10 @@ app.post("/chat", async (req, res) => {
       looksLikeFollowupQuestion(userMessage) && session?.lastAmenityKey
         ? session.lastAmenityKey
         : null;
+    const followupInventory =
+      looksLikeFollowupQuestion(userMessage) && session?.lastInventory
+        ? session.lastInventory
+        : null;
     const intent = await classifyIntent(userMessage);
     setSession(sessionId, { lastIntent: intent.intent });
     const inventoryIntent = isInventoryQuery(userMessage) ||
@@ -548,6 +573,10 @@ app.post("/chat", async (req, res) => {
         });
       }
 
+      setSession(sessionId, {
+        lastInventory: { type: "amenity", amenityKeys: [], unitType: null, petFriendly: true },
+      });
+
       return res.json({
         reply: `Pet‑friendly units:\n\n${lines.join("\n")}`,
       });
@@ -588,9 +617,14 @@ app.post("/chat", async (req, res) => {
     // ---------- INVENTORY-WIDE AVAILABILITY QUESTIONS ----------
     if (
       !listingId &&
-      (isInventoryAvailabilityQuestion(userMessage) || intent.intent === "inventory_availability")
+      (isInventoryAvailabilityQuestion(userMessage) ||
+        intent.intent === "inventory_availability" ||
+        followupInventory?.type === "availability")
     ) {
-      const dates = extractDates(userMessage);
+      let dates = extractDates(userMessage);
+      if (!dates && followupInventory?.type === "availability" && followupInventory?.dates) {
+        dates = followupInventory.dates;
+      }
       if (!dates) {
         return res.json({
           reply:
@@ -635,6 +669,10 @@ app.post("/chat", async (req, res) => {
       const total = lines.length;
       const shown = lines.slice(0, INVENTORY_AVAILABILITY_MAX);
       const more = total > shown.length ? `\n\n(+${total - shown.length} more available)` : "";
+
+      setSession(sessionId, {
+        lastInventory: { type: "availability", dates },
+      });
 
       return res.json({
         reply: `Available units for ${dates.start} to ${dates.end}:\n\n${shown.join("\n")}${more}`,
@@ -728,10 +766,41 @@ app.post("/chat", async (req, res) => {
 
     // ---------- INVENTORY-WIDE AMENITY QUESTIONS ----------
     if (!listingId || followupAmenityKey) {
-      let amenityKey = detectAmenityQuery(userMessage) || followupAmenityKey;
+      let amenityKeys = detectAmenityKeys(userMessage);
+      let unitType = detectUnitType(userMessage);
+      let wantsPetFriendly = detectPetFriendlyFilter(userMessage);
 
-      if (amenityKey || intent.intent === "amenity_inventory") {
-        setSession(sessionId, { lastAmenityKey: amenityKey });
+      if (followupInventory?.type === "amenity") {
+        if (!amenityKeys.length && followupInventory.amenityKeys) {
+          amenityKeys = followupInventory.amenityKeys;
+        }
+        if (!unitType && followupInventory.unitType) {
+          unitType = followupInventory.unitType;
+        }
+        if (!wantsPetFriendly && followupInventory.petFriendly) {
+          wantsPetFriendly = true;
+        }
+      }
+
+      const amenityKey = detectAmenityQuery(userMessage) || followupAmenityKey;
+
+      if (
+        amenityKeys.length > 0 ||
+        amenityKey ||
+        wantsPetFriendly ||
+        unitType ||
+        intent.intent === "amenity_inventory"
+      ) {
+        const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
+        setSession(sessionId, {
+          lastAmenityKey: amenityKey || effectiveAmenityKeys[0] || null,
+          lastInventory: {
+            type: "amenity",
+            amenityKeys: effectiveAmenityKeys,
+            unitType,
+            petFriendly: wantsPetFriendly,
+          },
+        });
         // Fetch details for each listing (cached), convert to safe facts, filter by amenity
         const safes = await Promise.all(
           listings.map(async (l) => {
@@ -740,11 +809,29 @@ app.post("/chat", async (req, res) => {
           })
         );
 
-        const matches = safes.filter((s) => hasAmenity(s, amenityKey));
+        let matches = safes;
+        if (effectiveAmenityKeys.length) {
+          matches = matches.filter((s) =>
+            effectiveAmenityKeys.every((k) => hasAmenity(s, k))
+          );
+        }
+        if (wantsPetFriendly) {
+          matches = matches.filter((s) => petPolicyFromRules(s) === "allowed");
+        }
+        if (unitType) {
+          matches = matches.filter((s) =>
+            String(s.name || "").toLowerCase().includes(unitType)
+          );
+        }
 
         if (matches.length === 0) {
+          const parts = [];
+          if (effectiveAmenityKeys.length) parts.push(effectiveAmenityKeys.join(" + "));
+          if (wantsPetFriendly) parts.push("pet‑friendly");
+          if (unitType) parts.push(unitType);
+          const label = parts.length ? parts.join(", ") : "that";
           return res.json({
-            reply: `I didn’t find any units with a ${amenityKey}.`,
+            reply: `I didn’t find any units matching ${label}.`,
           });
         }
 
@@ -753,8 +840,14 @@ app.post("/chat", async (req, res) => {
           .map((s) => `• [${s.name}](${s.bookingUrl})`)
           .join("\n");
 
+        const labelParts = [];
+        if (effectiveAmenityKeys.length) labelParts.push(effectiveAmenityKeys.join(" + "));
+        if (wantsPetFriendly) labelParts.push("pet‑friendly");
+        if (unitType) labelParts.push(unitType);
+        const label = labelParts.length ? ` (${labelParts.join(", ")})` : "";
+
         return res.json({
-          reply: `Units with a ${amenityKey}:\n\n${lines}`,
+          reply: `Units with${label}:\n\n${lines}`,
         });
       }
     }
@@ -922,9 +1015,20 @@ app.post("/chat", async (req, res) => {
         bookUrl = `${safe.bookingUrl}${sep}start=${dates.start}&end=${dates.end}`;
       }
 
+      const timeLine = formatCheckTimes(safe);
+      const minStayLine =
+        safe.minNights != null
+          ? `Minimum stay: ${safe.minNights} ${safe.minNights === 1 ? "night" : "nights"}.`
+          : "";
+      const extraLines = [timeLine, minStayLine].filter(Boolean).join("\n");
+
       const bookingLine = bookUrl ? `\n\nBook now: ${bookUrl}` : "";
       return res.json({
-        reply: (data.message || "Availability check complete.") + bookingLine + memoryNote,
+        reply:
+          (data.message || "Availability check complete.") +
+          (extraLines ? `\n${extraLines}` : "") +
+          bookingLine +
+          memoryNote,
       });
     }
 

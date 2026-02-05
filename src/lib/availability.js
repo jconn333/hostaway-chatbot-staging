@@ -194,69 +194,109 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
 
 export function extractDates(message, timeZone = "America/New_York") {
   const msg = (message || "").toLowerCase();
+  const nightCount = parseNightCount(msg);
+  let dates = null;
 
   // 1) Explicit ISO range: YYYY-MM-DD ... YYYY-MM-DD
   const isoMatches = msg.match(/\d{4}-\d{2}-\d{2}/g);
   if (isoMatches && isoMatches.length >= 2) {
-    return { start: isoMatches[0], end: isoMatches[1] };
+    dates = { start: isoMatches[0], end: isoMatches[1], explicitRange: true };
   }
 
   // 2) Month name dates: "March 24" / "Mar 24" (supports ranges)
-  const monthRange = parseMonthNameRange(msg, timeZone);
-  if (monthRange) return monthRange;
+  if (!dates) {
+    const monthRange = parseMonthNameRange(msg, timeZone);
+    if (monthRange) dates = monthRange;
+  }
+
+  // 2b) "weekend of March 14" -> Friday-Sunday of that week
+  if (!dates) {
+    const weekendOf = parseWeekendOfMonthDay(msg, timeZone);
+    if (weekendOf) dates = weekendOf;
+  }
 
   // 3) Weekday range: "Friday to Sunday", "Fri-Sun", "Fri through Sun"
-  const weekdayRange = parseWeekdayRange(msg, timeZone);
-  if (weekdayRange) return weekdayRange;
+  if (!dates) {
+    const weekdayRange = parseWeekdayRange(msg, timeZone);
+    if (weekdayRange) dates = weekdayRange;
+  }
 
   // 4) Relative phrases
-  if (msg.includes("tonight") || (msg.includes("today") && msg.includes("night"))) {
+  if (
+    !dates &&
+    (msg.includes("tonight") || (msg.includes("today") && msg.includes("night")))
+  ) {
     const start = isoDateInTimeZoneDaysFromNow(timeZone, 0);
     const end = isoDateInTimeZoneDaysFromNow(timeZone, 1);
-    return { start, end };
+    dates = { start, end };
   }
 
   // IMPORTANT: check "day after tomorrow" BEFORE "tomorrow"
-  if (msg.includes("day after tomorrow")) {
+  if (!dates && msg.includes("day after tomorrow")) {
     const start = isoDateInTimeZoneDaysFromNow(timeZone, 2);
     const end = isoDateInTimeZoneDaysFromNow(timeZone, 3);
-    return { start, end };
+    dates = { start, end };
   }
 
-  if (msg.includes("tomorrow")) {
+  if (!dates && msg.includes("tomorrow")) {
     const start = isoDateInTimeZoneDaysFromNow(timeZone, 1);
     const end = isoDateInTimeZoneDaysFromNow(timeZone, 2);
-    return { start, end };
+    dates = { start, end };
   }
 
-  if (msg.includes("this weekend")) {
+  if (!dates && msg.includes("this weekend")) {
     const start = isoDateThisOrNextWeekday(timeZone, 5); // Friday
     const end = addDays(start, 2); // checkout Sunday (2 nights)
-    return { start, end };
+    dates = { start, end };
   }
 
-  if (msg.includes("next weekend")) {
+  if (!dates && msg.includes("next weekend")) {
     const start = isoDateNextWeekdayFromNextWeek(timeZone, 5); // Friday of next week
     const end = addDays(start, 2);
-    return { start, end };
+    dates = { start, end };
   }
 
   // 5) Single weekday: "this friday", "next friday", "friday night"
-  const singleWeekday = parseSingleWeekday(msg, timeZone);
-  if (singleWeekday) {
-    const start = singleWeekday;
-    const end = addDays(start, 1);
-    return { start, end };
+  if (!dates) {
+    const singleWeekday = parseSingleWeekday(msg, timeZone);
+    if (singleWeekday) {
+      const start = singleWeekday;
+      const end = addDays(start, 1);
+      dates = { start, end };
+    }
   }
 
   // 6) Fallback: single ISO date anywhere -> 1 night
-  if (isoMatches && isoMatches.length === 1) {
+  if (!dates && isoMatches && isoMatches.length === 1) {
     const start = isoMatches[0];
     const end = addDays(start, 1);
-    return { start, end };
+    dates = { start, end };
   }
 
-  return null;
+  if (!dates) return null;
+
+  if (nightCount && !dates.explicitRange) {
+    dates.end = addDays(dates.start, nightCount);
+  }
+
+  return { start: dates.start, end: dates.end };
+}
+
+function parseNightCount(msg) {
+  const wordMap = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+  };
+  const re = /\b(\d+|one|two|three|four|five)\s*(?:night|nights)\b/i;
+  const m = msg.match(re);
+  if (!m) return null;
+  const raw = m[1].toLowerCase();
+  const n = wordMap[raw] ?? Number(raw);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, 5);
 }
 
 // ----------------------
@@ -372,8 +412,20 @@ function parseWeekdayRange(msg, timeZone) {
   const m = cleaned.match(rangeRe);
   if (!m) return null;
 
-  const startWord = m[1].toLowerCase();
-  const endWord = m[7].toLowerCase();
+  const full = m[0];
+  const parts = full.split(/\b(?:to|through|-)\b/i);
+  if (parts.length < 2) return null;
+
+  const startMatch = parts[0].match(
+    /\b(sun(day)?|mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?)\b/i
+  );
+  const endMatch = parts[1].match(
+    /\b(sun(day)?|mon(day)?|tue(s(day)?)?|wed(nesday)?|thu(rs(day)?)?|fri(day)?|sat(urday)?)\b/i
+  );
+  if (!startMatch || !endMatch) return null;
+
+  const startWord = startMatch[1].toLowerCase();
+  const endWord = endMatch[1].toLowerCase();
 
   const startKey = startWord.slice(0, 3);
   const endKey = endWord.slice(0, 3);
@@ -397,7 +449,7 @@ function parseWeekdayRange(msg, timeZone) {
   if (steps >= 8) return null;
   if (end === start) end = addDays(start, 1);
 
-  return { start, end };
+  return { start, end, explicitRange: true };
 }
 
 function parseMonthNameRange(msg, timeZone) {
@@ -417,7 +469,7 @@ function parseMonthNameRange(msg, timeZone) {
   };
 
   const re =
-    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:\s*(?:to|through|-)\s*(?:(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+)?(\d{1,2}))\b/i;
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:\s*(?:to|through|-)\s*(?:(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+)?(\d{1,2}))?\b/i;
 
   const m = msg.match(re);
   if (!m) return null;
@@ -425,15 +477,15 @@ function parseMonthNameRange(msg, timeZone) {
   const m1 = months[m[1].toLowerCase()];
   const d1 = Number(m[2]);
   const m2 = m[3] ? months[m[3].toLowerCase()] : m1;
-  const d2 = Number(m[4]);
+  const d2 = m[4] ? Number(m[4]) : d1;
 
   if (!m1 || !m2 || !Number.isFinite(d1) || !Number.isFinite(d2)) return null;
 
   const start = monthDayToIso(timeZone, m1, d1);
   const end = monthDayToIso(timeZone, m2, d2);
 
-  if (start === end) return { start, end: addDays(start, 1) };
-  return { start, end };
+  if (start === end) return { start, end: addDays(start, 1), explicitRange: false };
+  return { start, end, explicitRange: true };
 }
 
 function monthDayToIso(timeZone, monthNum, dayNum) {
@@ -445,4 +497,42 @@ function monthDayToIso(timeZone, monthNum, dayNum) {
   if (candidate < todayIso) year = ty + 1;
 
   return `${year}-${String(monthNum).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+}
+
+function parseWeekendOfMonthDay(msg, timeZone) {
+  if (!msg.includes("weekend of")) return null;
+
+  const months = {
+    jan: 1, january: 1,
+    feb: 2, february: 2,
+    mar: 3, march: 3,
+    apr: 4, april: 4,
+    may: 5,
+    jun: 6, june: 6,
+    jul: 7, july: 7,
+    aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10,
+    nov: 11, november: 11,
+    dec: 12, december: 12,
+  };
+
+  const re =
+    /\bweekend of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b/i;
+
+  const m = msg.match(re);
+  if (!m) return null;
+
+  const monthNum = months[m[1].toLowerCase()];
+  const dayNum = Number(m[2]);
+  if (!monthNum || !Number.isFinite(dayNum)) return null;
+
+  const anchor = monthDayToIso(timeZone, monthNum, dayNum);
+  const [y, mo, d] = anchor.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  const dow = dt.getUTCDay(); // 0=Sun ... 6=Sat
+
+  const friday = addDays(anchor, -((dow - 5 + 7) % 7));
+  const end = addDays(friday, 2);
+  return { start: friday, end, explicitRange: true };
 }
