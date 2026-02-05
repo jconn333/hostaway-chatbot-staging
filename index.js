@@ -172,7 +172,12 @@ async function classifyIntent(message) {
       ],
     });
     const raw = resp.output_text || "";
-    const parsed = JSON.parse(raw);
+    const cleaned = raw
+      .trim()
+      .replace(/^```(?:json)?/i, "")
+      .replace(/```$/i, "")
+      .trim();
+    const parsed = JSON.parse(cleaned);
     if (parsed && typeof parsed.intent === "string") return parsed;
   } catch (err) {
     console.error("Intent classify error:", err);

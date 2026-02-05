@@ -68,5 +68,54 @@
     "message": "What about that?",
     "expectIncludes": ["Available units for 2026-02-07 to 2026-02-09"],
     "expectRegex": []
+  },
+  {
+    "name": "availability-soft-ask",
+    "sessionId": "golden-soft",
+    "message": "Thinking about a weekend at Red Fern — any openings?",
+    "expectIncludes": ["Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "availability-date-phrase",
+    "sessionId": "golden-soft",
+    "message": "Can I get Red Fern for April 1 for two nights?",
+    "expectIncludes": ["2026-04-01", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-synonym-jacuzzi",
+    "sessionId": "golden-amenity-syn",
+    "message": "Does Red Fern have a jacuzzi?",
+    "expectOneOfIncludes": ["Red Fern Cabin", "jacuzzi", "hot tub"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-followup-clarify",
+    "sessionId": "golden-amenity-syn",
+    "message": "What about a fireplace?",
+    "expectOneOfIncludes": ["Red Fern Cabin", "fireplace"],
+    "expectRegex": []
+  },
+  {
+    "name": "policy-followup",
+    "sessionId": "golden-policy",
+    "message": "Okay, which ones do allow pets then?",
+    "expectOneOfIncludes": ["Pet‑friendly units:", "Pet-friendly units:", "Units with"],
+    "expectRegex": []
+  },
+  {
+    "name": "booking-followup",
+    "sessionId": "golden-soft",
+    "message": "Cool — can you book it for me?",
+    "expectOneOfIncludes": ["Book now:", "booking link"],
+    "expectRegex": []
+  },
+  {
+    "name": "inventory-variant",
+    "sessionId": "golden-inventory",
+    "message": "Which units are open Feb 8–Feb 10?",
+    "expectIncludes": ["2026-02-08", "2026-02-10"],
+    "expectRegex": []
   }
 ]
