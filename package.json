@@ -9,7 +9,8 @@
     "smoke:terminal": "./scripts/terminal-smoke.sh",
     "smoke:inprocess": "node scripts/inprocess-smoke.js",
     "dev": "node scripts/dev-watch.js",
-    "slack:post": "node scripts/slack-post.js"
+    "slack:post": "node scripts/slack-post.js",
+    "golden": "node scripts/golden-run.js"
   },
   "keywords": [],
   "author": "",

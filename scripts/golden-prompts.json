@@ -1,0 +1,51 @@
+[
+  {
+    "name": "availability-weekend",
+    "sessionId": "golden-weekend",
+    "message": "Is red fern available this weekend?",
+    "expectIncludes": ["Book now:"],
+    "expectRegex": ["Check.?in"]
+  },
+  {
+    "name": "next-weekend",
+    "sessionId": "golden-weekend",
+    "message": "When is the next weekend it is available?",
+    "expectOneOfIncludes": ["Next available weekend is", "I couldn't find an available weekend"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-followup",
+    "sessionId": "golden-weekend",
+    "message": "does it have a hot tub?",
+    "expectIncludes": ["Red Fern Cabin", "hot tub"],
+    "expectRegex": []
+  },
+  {
+    "name": "joy-two-nights",
+    "sessionId": "golden-joy",
+    "message": "Looking to book Joy Lodge Suite Feb 7 for two nights - available?",
+    "expectIncludes": ["2026-02-07", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "pet-friendly-suites",
+    "sessionId": "golden-pets",
+    "message": "Which suites are pet friendly?",
+    "expectIncludes": ["Units with", "Suite"],
+    "expectRegex": []
+  },
+  {
+    "name": "inventory-availability",
+    "sessionId": "golden-inventory",
+    "message": "Which units are available Feb 7 to Feb 9?",
+    "expectIncludes": ["Available units for 2026-02-07 to 2026-02-09"],
+    "expectRegex": []
+  },
+  {
+    "name": "inventory-followup",
+    "sessionId": "golden-inventory",
+    "message": "What about that?",
+    "expectIncludes": ["Available units for 2026-02-07 to 2026-02-09"],
+    "expectRegex": []
+  }
+]
