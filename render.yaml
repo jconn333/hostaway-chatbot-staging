@@ -1,0 +1,11 @@
+previews:
+  generation: automatic
+
+services:
+  - type: web
+    name: hostaway-chat-bot
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: node index.js
+    autoDeploy: true
