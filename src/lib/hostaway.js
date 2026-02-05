@@ -1,6 +1,7 @@
 // src/lib/hostaway.js
 
 let listingsCache = { data: null, fetchedAt: 0 };
+let listingDetailsCache = new Map(); // id -> { data, fetchedAt }
 
 /* ===============================
    HOSTAWAY AUTH
@@ -60,6 +61,35 @@ export async function getListingsCached(accessToken) {
   return listings;
 }
 
+export async function fetchListingById(listingId, accessToken) {
+  const resp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Cache-control": "no-cache",
+    },
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Hostaway listing failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.result;
+}
+
+export async function fetchListingByIdCached(listingId, accessToken) {
+  const TEN_MINUTES = 10 * 60 * 1000;
+  const hit = listingDetailsCache.get(String(listingId));
+
+  if (hit && Date.now() - hit.fetchedAt < TEN_MINUTES) return hit.data;
+
+  const data = await fetchListingById(listingId, accessToken);
+  listingDetailsCache.set(String(listingId), { data, fetchedAt: Date.now() });
+  return data;
+}
+
 /* ===============================
    SAFETY FILTER (CRITICAL)
    - Only public info
@@ -107,24 +137,6 @@ export function toSafeListingFacts(listing) {
   };
 }
 
-export async function fetchListingById(listingId, accessToken) {
-  const resp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Cache-control": "no-cache",
-    },
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Hostaway listing failed (${resp.status}): ${text}`);
-  }
-
-  const data = await resp.json();
-  return data?.result;
-}
-
 export async function fetchCalendarRange(listingId, startDate, endDate, accessToken) {
   const url =
     `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
@@ -148,6 +160,6 @@ export async function fetchCalendarRange(listingId, startDate, endDate, accessTo
 }
 
 export async function fetchSafeListingFacts(listingId, accessToken) {
-  const listing = await fetchListingById(listingId, accessToken);
+  const listing = await fetchListingByIdCached(listingId, accessToken);
   return toSafeListingFacts(listing);
 }

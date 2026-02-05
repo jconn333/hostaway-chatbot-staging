@@ -146,7 +146,8 @@ export function getSandboxHtml() {
 
     .chat{
       display:flex; flex-direction:column; gap: 10px;
-      max-height: 520px;
+      min-height: 520px;
+      max-height: 720px;
       overflow:auto;
       padding-right: 6px;
     }
@@ -371,13 +372,23 @@ export function getSandboxHtml() {
     setTimeout(() => { toast.style.display = "none"; }, 2400);
   }
 
-  function addBubble(text, who){
-    const div = document.createElement("div");
-    div.className = "bubble " + (who === "me" ? "me" : "bot");
-    div.textContent = text;
-    chat.appendChild(div);
-    chat.scrollTop = chat.scrollHeight;
+ function addBubble(text, who){
+  const div = document.createElement("div");
+  div.className = "bubble " + (who === "me" ? "me" : "bot");
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  return div; // ✅ IMPORTANT: allows typing bubble to be updated later
+}
+ 
+function setTypingBubble(div, isTyping){
+  if (!div) return;
+  if (isTyping){
+    div.textContent = "";
+    div.innerHTML = "Typing<span class='loadingDots'></span>";
   }
+  chat.scrollTop = chat.scrollHeight;
+}
 
   function setSending(isSending){
     sendBtn.disabled = isSending;
@@ -426,56 +437,57 @@ export function getSandboxHtml() {
   }
 
   async function ask(){
-    const name = testerName.value.trim();
-    if (!name){
-      toastShow("Missing tester name", "Please enter your name before testing.");
-      testerName.focus();
-      return;
-    }
-
-    const msg = (question.value || "").trim();
-    if (!msg){
-      toastShow("Missing message", "Type a question to send.");
-      question.focus();
-      return;
-    }
-
-    const lidRaw = (listingId.value || "").trim();
-    const lid = lidRaw ? Number(lidRaw) : null;
-
-    lastUserMessage = msg;
-    lastListingId = lid;
-    resetFeedbackUI();
-
-    addBubble(msg, "me");
-    setSending(true);
-    setFeedbackEnabled(false);
-
-    try{
-      const payload = { message: msg };
-      if (Number.isFinite(lid)) payload.listingId = lid;
-
-      const res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-      lastBotReply = data.reply || "(no reply)";
-      addBubble(lastBotReply, "bot");
-
-      setFeedbackEnabled(true);
-      toastShow("Response received", "Rate the answer on the right.");
-    }catch(e){
-      addBubble("Server error. Check logs and try again.", "bot");
-      toastShow("Error", "Could not reach the server.");
-    }finally{
-      setSending(false);
-    }
+  const name = testerName.value.trim();
+  if (!name){
+    toastShow("Missing tester name", "Please enter your name before testing.");
+    testerName.focus();
+    return;
   }
 
+  const msg = (question.value || "").trim();
+  if (!msg){
+    toastShow("Missing message", "Type a question to send.");
+    question.focus();
+    return;
+  }
+
+  const lidRaw = (listingId.value || "").trim();
+  const lid = lidRaw ? Number(lidRaw) : null;
+
+  lastUserMessage = msg;
+  lastListingId = lid;
+  resetFeedbackUI();
+
+  addBubble(msg, "me");
+  setSending(true);
+  setFeedbackEnabled(false);
+
+  try{
+    const payload = { message: msg };
+    if (Number.isFinite(lid)) payload.listingId = lid;
+
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    lastBotReply = data.reply || "(no reply)";
+    addBubble(lastBotReply, "bot");
+
+    setFeedbackEnabled(true);
+    toastShow("Response received", "Rate the answer on the right.");
+  }catch(e){
+    addBubble("Server error. Check logs and try again.", "bot");
+    toastShow("Error", "Could not reach the server.");
+  }finally{
+    setSending(false);
+  }
+}
+
   async function saveFeedback(){
+  console.log("saveFeedback clicked");
     const name = testerName.value.trim();
     if (!name){
       toastShow("Missing tester name", "Please enter your name.");
@@ -520,6 +532,15 @@ export function getSandboxHtml() {
 
       fbStatus.textContent = "Saved ✅";
       toastShow("Saved", "Feedback stored in the database.");
+      // Clear chat + input for next tester
+    chat.innerHTML = "";
+    question.value = "";
+    lastListingId = null;
+    lastUserMessage = "";
+    lastBotReply = "";
+    resetFeedbackUI();
+    setFeedbackEnabled(false);
+    question.focus();
     }catch(e){
       fbStatus.textContent = "Save failed";
       toastShow("Save failed", "Check server logs and DB connection.");
@@ -527,12 +548,13 @@ export function getSandboxHtml() {
       submitBtn.disabled = false;
     }
   }
+sendBtn.addEventListener("click", ask);
 
-  sendBtn.addEventListener("click", ask);
-  clearBtn.addEventListener("click", () => {
-    chat.innerHTML = "";
-    toastShow("Cleared", "Chat cleared on screen.");
-  });
+clearBtn.addEventListener("click", () => {
+  chat.innerHTML = "";
+  toastShow("Cleared", "Chat cleared on screen.");
+  question.focus(); // ✅ put cursor back in message box
+});
 
   thumbUp.addEventListener("click", () => markThumb("up"));
   thumbDown.addEventListener("click", () => markThumb("down"));

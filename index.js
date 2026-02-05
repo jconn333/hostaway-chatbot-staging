@@ -19,6 +19,8 @@ import {
 } from "./src/lib/hostaway.js";
 import { suggestUnits, findListingIdFromMessage } from "./src/lib/listings.js";
 import { createHostawayRouter } from "./src/routes/hostaway.js";
+import { detectAmenityQuery, hasAmenity } from "./src/lib/inventory.js";
+import { fetchListingByIdCached } from "./src/lib/hostaway.js";
 
 const { Pool } = pkg;
 
@@ -70,6 +72,37 @@ app.post("/chat", async (req, res) => {
     const accessToken = tokenData.access_token;
 
     const listings = await getListingsCached(accessToken);
+    // ---------- INVENTORY-WIDE AMENITY QUESTIONS ----------
+if (!listingId) {
+  const amenityKey = detectAmenityQuery(userMessage);
+
+  if (amenityKey) {
+    // Fetch details for each listing (cached), convert to safe facts, filter by amenity
+    const safes = await Promise.all(
+      listings.map(async (l) => {
+        const full = await fetchListingByIdCached(l.id, accessToken);
+        return toSafeListingFacts(full);
+      })
+    );
+
+    const matches = safes.filter((s) => hasAmenity(s, amenityKey));
+
+    if (matches.length === 0) {
+      return res.json({
+        reply: `I didn’t find any units with a ${amenityKey}.`,
+      });
+    }
+
+    const lines = matches
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+      .map((s) => `• ${s.name} — ${s.bookingUrl}`)
+      .join("\n");
+
+    return res.json({
+      reply: `Units with a ${amenityKey}:\n\n${lines}`,
+    });
+  }
+}
 
     // Detect listing from message if not explicitly provided
     if (!listingId) {
