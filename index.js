@@ -10,7 +10,13 @@ import {
   addDays,
   extractDates,
 } from "./src/lib/availability.js";
-import { getHostawayAccessToken, getListingsCached, toSafeListingFacts } from "./src/lib/hostaway.js";
+import {
+  getHostawayAccessToken,
+  getListingsCached,
+  toSafeListingFacts,
+  fetchListingById,
+  fetchCalendarRange,
+} from "./src/lib/hostaway.js";
 
 const { Pool } = pkg;
 
@@ -155,17 +161,9 @@ app.get("/hostaway/test", async (req, res) => {
 app.get("/hostaway/safe-listing/:id", async (req, res) => {
   try {
     const tokenData = await getHostawayAccessToken();
-    const resp = await fetch(`https://api.hostaway.com/v1/listings/${req.params.id}`, {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
+    const listing = await fetchListingById(req.params.id, tokenData.access_token);
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`Hostaway listing failed (${resp.status}): ${text}`);
-    }
-
-    const data = await resp.json();
-    res.json({ ok: true, safe: toSafeListingFacts(data.result) });
+    res.json({ ok: true, safe: toSafeListingFacts(listing) });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -198,25 +196,7 @@ app.get("/hostaway/availability/:id", async (req, res) => {
       });
     }
 
-    const url =
-      `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
-      `?startDate=${start}&endDate=${endForCalendar}`;
-
-    const resp = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Cache-control": "no-cache",
-      },
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`Availability failed (${resp.status}): ${text}`);
-    }
-
-    const data = await resp.json();
-    const days = data?.result || [];
+    const days = await fetchCalendarRange(listingId, start, endForCalendar, accessToken);
 
     const summary = summarizeAvailabilityWithAlternatives(days, start, end);
 
@@ -277,33 +257,12 @@ app.post("/chat", async (req, res) => {
         });
       }
 
-      const url =
-        `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
-        `?startDate=${dates.start}&endDate=${endForCalendar}`;
-
-      const calResp = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Cache-control": "no-cache",
-        },
-      });
-
-      if (!calResp.ok) {
-        const text = await calResp.text();
-        throw new Error(`Availability failed (${calResp.status}): ${text}`);
-      }
-
-      const calData = await calResp.json();
-      const days = calData?.result || [];
+      const days = await fetchCalendarRange(listingId, dates.start, endForCalendar, accessToken);
       const data = summarizeAvailabilityWithAlternatives(days, dates.start, dates.end);
 
       // Fetch safe listing to get stable bookingUrl
-      const listingResp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const listingData = await listingResp.json();
-      const safe = toSafeListingFacts(listingData.result);
+      const listing = await fetchListingById(listingId, accessToken);
+      const safe = toSafeListingFacts(listing);
 
       // Only include dates when the requested range is actually available
       let bookUrl = safe.bookingUrl;
@@ -318,21 +277,8 @@ app.post("/chat", async (req, res) => {
     }
 
     // General Q&A: Fetch listing and build safe facts
-    const listingResp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Cache-control": "no-cache",
-      },
-    });
-
-    if (!listingResp.ok) {
-      const text = await listingResp.text();
-      throw new Error(`Hostaway listing failed (${listingResp.status}): ${text}`);
-    }
-
-    const listingData = await listingResp.json();
-    const safe = toSafeListingFacts(listingData.result);
+    const listing = await fetchListingById(listingId, accessToken);
+    const safe = toSafeListingFacts(listing);
     const safeFactsText = JSON.stringify(safe, null, 2);
 
     const aiResponse = await client.responses.create({

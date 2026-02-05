@@ -106,3 +106,48 @@ export function toSafeListingFacts(listing) {
     bookingUrl: `https://book.amishcountrylodging.com/listings/${listing.id}`,
   };
 }
+
+export async function fetchListingById(listingId, accessToken) {
+  const resp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Cache-control": "no-cache",
+    },
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Hostaway listing failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.result;
+}
+
+export async function fetchCalendarRange(listingId, startDate, endDate, accessToken) {
+  const url =
+    `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
+    `?startDate=${startDate}&endDate=${endDate}`;
+
+  const resp = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Cache-control": "no-cache",
+    },
+  });
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Availability failed (${resp.status}): ${text}`);
+  }
+
+  const data = await resp.json();
+  return data?.result || [];
+}
+
+export async function fetchSafeListingFacts(listingId, accessToken) {
+  const listing = await fetchListingById(listingId, accessToken);
+  return toSafeListingFacts(listing);
+}
