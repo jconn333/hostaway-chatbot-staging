@@ -17,6 +17,8 @@ import {
   fetchListingById,
   fetchCalendarRange,
 } from "./src/lib/hostaway.js";
+import { suggestUnits, findListingIdFromMessage } from "./src/lib/listings.js";
+import { createHostawayRouter } from "./src/routes/hostaway.js";
 
 const { Pool } = pkg;
 
@@ -33,93 +35,6 @@ const db = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
-
-/* ===============================
-   UNIT SUGGESTIONS
-================================ */
-function suggestUnits(message, listings) {
-  const msg = (message || "").toLowerCase();
-  const words = msg.split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
-
-  const scored = listings.map((l) => {
-    const hay = `${l.name || ""} ${l.internalListingName || ""} ${l.externalListingName || ""} ${l.airbnbName || ""}`.toLowerCase();
-    let score = 0;
-
-    for (const w of words) {
-      if (hay.includes(w)) score += 1;
-    }
-
-    return { name: l.name, score };
-  });
-
-  const matches = scored
-    .filter((x) => x.score > 0 && x.name)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 3);
-
-  // If we found fewer than 3, fill with defaults
-  if (matches.length < 3) {
-    const already = new Set(matches.map((m) => m.name));
-    for (const l of listings) {
-      if (l.name && !already.has(l.name)) {
-        matches.push({ name: l.name, score: 0 });
-        already.add(l.name);
-      }
-      if (matches.length === 3) break;
-    }
-  }
-
-  return matches;
-}
-
-/* ===============================
-   LISTING NAME MATCHING (supports nicknames)
-================================ */
-function findListingIdFromMessage(message, listings) {
-  const msg = (message || "").toLowerCase();
-  const candidates = [];
-
-  for (const l of listings) {
-    const names = [l.name, l.internalListingName, l.externalListingName, l.airbnbName]
-      .filter((n) => n != null)
-      .map((n) => String(n).trim())
-      .filter((n) => n.length >= 4);
-
-    for (const name of names) {
-      candidates.push({
-        id: l.id,
-        nameLower: name.toLowerCase(),
-        length: name.length,
-      });
-    }
-  }
-
-  // Longest names first to reduce false positives
-  candidates.sort((a, b) => b.length - a.length);
-
-  // Strong match: full phrase present
-  for (const c of candidates) {
-    if (msg.includes(c.nameLower)) return c.id;
-  }
-
-  // Nickname/partial match: most meaningful words (>=3 chars) present
-  for (const c of candidates) {
-    const words = c.nameLower.split(/\s+/).filter((w) => w.length >= 3);
-    if (words.length === 0) continue;
-
-    let hits = 0;
-    for (const w of words) {
-      if (msg.includes(w)) hits += 1;
-    }
-
-    // Accept if most words match (e.g. "Joy Suite" -> "Joy Lodge Suite")
-    if (hits >= Math.max(2, Math.ceil(words.length * 0.6))) {
-      return c.id;
-    }
-  }
-
-  return null;
-}
 
 /* ===============================
    ROUTES
@@ -143,75 +58,7 @@ app.get("/review", (req, res) => {
   res.send(getReviewHtml());
 });
 
-/* ---------- HOSTAWAY DEBUG ---------- */
-app.get("/hostaway/test", async (req, res) => {
-  try {
-    const data = await getHostawayAccessToken();
-    res.json({
-      ok: true,
-      token_type: data.token_type,
-      expires_in: data.expires_in,
-      token_preview: data.access_token.slice(0, 12) + "...",
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-app.get("/hostaway/safe-listing/:id", async (req, res) => {
-  try {
-    const tokenData = await getHostawayAccessToken();
-    const listing = await fetchListingById(req.params.id, tokenData.access_token);
-
-    res.json({ ok: true, safe: toSafeListingFacts(listing) });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/* ---------- AVAILABILITY ENDPOINT ---------- */
-app.get("/hostaway/availability/:id", async (req, res) => {
-  try {
-    const listingId = req.params.id;
-    const { start, end } = req.query;
-
-    if (!start || !end) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing start or end date (YYYY-MM-DD)",
-      });
-    }
-
-    const tokenData = await getHostawayAccessToken();
-    const accessToken = tokenData.access_token;
-
-    // Treat `end` as checkout date (not a night stayed). Query calendar through end-1 day.
-    const endForCalendar = addDays(end, -1);
-
-    // If someone passes the same day for start/end, there's no stay to check.
-    if (endForCalendar < start) {
-      return res.status(400).json({
-        ok: false,
-        error: "End date must be after start date (checkout after check-in).",
-      });
-    }
-
-    const days = await fetchCalendarRange(listingId, start, endForCalendar, accessToken);
-
-    const summary = summarizeAvailabilityWithAlternatives(days, start, end);
-
-    res.json({
-      ok: true,
-      listingId,
-      start,
-      end,
-      ...summary,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
+app.use("/hostaway", createHostawayRouter());
 
 /* ---------- CHAT ---------- */
 app.post("/chat", async (req, res) => {
