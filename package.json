@@ -7,6 +7,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "smoke": "node scripts/smoke.js",
     "smoke:terminal": "./scripts/terminal-smoke.sh",
+    "smoke:inprocess": "node scripts/inprocess-smoke.js",
     "dev": "node scripts/dev-watch.js"
   },
   "keywords": [],

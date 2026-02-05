@@ -153,7 +153,9 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
     return {
       available: false,
       suggestedStart,
-      message: `No — this unit is already booked on ${day.date}.` + suggestion,
+      message:
+        `No — this unit is already booked during ${start} to ${end} (booked on ${day.date}).` +
+        suggestion,
     };
   }
 

@@ -259,7 +259,7 @@ function policyAnswerFromHouseRules(safe, intent) {
       return "Pets aren’t allowed at this property.";
     }
     if (/\bpet fee\b|\bpets allowed\b|\bpet[- ]friendly\b/.test(hay)) {
-      return "Pets may be allowed with a fee; I can confirm details if you’d like.";
+      return "Pets are allowed at this property.";
     }
   }
 
@@ -688,6 +688,14 @@ app.post("/chat", async (req, res) => {
         secondarySafe?.state &&
         String(primarySafe.state).toLowerCase() === String(secondarySafe.state).toLowerCase();
 
+      const msgLower = (userMessage || "").toLowerCase();
+      const pIdx = msgLower.indexOf(String(primarySafe.name || "").toLowerCase());
+      const sIdx = msgLower.indexOf(String(secondarySafe.name || "").toLowerCase());
+      const shouldSwap =
+        pIdx >= 0 && sIdx >= 0 && sIdx < pIdx;
+      const displayPrimary = shouldSwap ? secondarySafe : primarySafe;
+      const displaySecondary = shouldSwap ? primarySafe : secondarySafe;
+
       const a = getLatLon(primarySafe);
       const b = getLatLon(secondarySafe);
       let locationLine = "I don’t have exact distance data between units.";
@@ -704,17 +712,17 @@ app.post("/chat", async (req, res) => {
       }
       if (sameCity && sameState) {
         // keep the city/state note if we don't have coordinates
-      } else if (primarySafe.city || primarySafe.state || secondarySafe.city || secondarySafe.state) {
-        const aLoc = [primarySafe.city, primarySafe.state].filter(Boolean).join(", ");
-        const bLoc = [secondarySafe.city, secondarySafe.state].filter(Boolean).join(", ");
-        locationLine = `They appear to be in different locations: ${primarySafe.name} is in ${aLoc || "an unknown location"}, and ${secondarySafe.name} is in ${bLoc || "an unknown location"}. I don’t have exact distance data between units.`;
+      } else if (displayPrimary.city || displayPrimary.state || displaySecondary.city || displaySecondary.state) {
+        const aLoc = [displayPrimary.city, displayPrimary.state].filter(Boolean).join(", ");
+        const bLoc = [displaySecondary.city, displaySecondary.state].filter(Boolean).join(", ");
+        locationLine = `They appear to be in different locations: ${displayPrimary.name} is in ${aLoc || "an unknown location"}, and ${displaySecondary.name} is in ${bLoc || "an unknown location"}. I don’t have exact distance data between units.`;
       }
 
       return res.json({
         reply:
           `${locationLine}\n\n` +
-          `[${primarySafe.name}](${primarySafe.bookingUrl})\n` +
-          `[${secondarySafe.name}](${secondarySafe.bookingUrl})`,
+          `[${displayPrimary.name}](${displayPrimary.bookingUrl})\n` +
+          `[${displaySecondary.name}](${displaySecondary.bookingUrl})`,
       });
     }
 
@@ -799,11 +807,18 @@ app.post("/chat", async (req, res) => {
             if (uniform) {
               return res.json({ reply: generalized });
             }
+            if (policyIntent === "pets") {
+              return res.json({
+                reply:
+                  `${generalized}\n\n` +
+                  "Pet policies can vary by unit. Do you have a specific unit you'd like me to check, " +
+                  "or would you like a list of pet‑friendly units?",
+              });
+            }
             return res.json({
               reply:
                 `${generalized}\n\n` +
-                "Pet policies can vary by unit. Do you have a specific unit you'd like me to check, " +
-                "or would you like a list of pet‑friendly units?",
+                "Policies can vary by unit. Do you have a specific unit you'd like me to check?",
             });
           }
         }
@@ -1124,6 +1139,14 @@ app.get("/feedback/recent", async (req, res) => {
 /* ===============================
    START SERVER
 ================================ */
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
-});
+function startServer() {
+  app.listen(PORT, () => {
+    console.log(`Server listening on http://localhost:${PORT}`);
+  });
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  startServer();
+}
+
+export { app, startServer };

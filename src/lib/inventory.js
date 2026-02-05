@@ -1,7 +1,8 @@
 // src/lib/inventory.js
 
 const AMENITY_SYNONYMS = [
-  { key: "hot tub", patterns: ["hot tub", "hot tubs", "hottub", "hottubs", "jacuzzi", "spa tub", "spa tubs"] },
+  { key: "hot tub", patterns: ["hot tub", "hot tubs", "hottub", "hottubs", "spa tub", "spa tubs"] },
+  { key: "jacuzzi", patterns: ["jacuzzi", "jacuzzis", "spa", "whirlpool"] },
   { key: "pool", patterns: ["pool", "pools", "swimming pool", "swimming pools"] },
   { key: "fireplace", patterns: ["fireplace", "fireplaces", "gas fireplace", "wood fireplace"] },
 ];
