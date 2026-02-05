@@ -22,7 +22,12 @@ import {
 } from "./src/lib/hostaway.js";
 import { suggestUnits, findListingIdFromMessage } from "./src/lib/listings.js";
 import { createHostawayRouter } from "./src/routes/hostaway.js";
-import { detectAmenityQuery, detectAmenityKeys, hasAmenity } from "./src/lib/inventory.js";
+import {
+  detectAmenityQuery,
+  detectAmenityKeys,
+  detectAmenityKeyLoose,
+  hasAmenity,
+} from "./src/lib/inventory.js";
 import { fetchListingByIdCached } from "./src/lib/hostaway.js";
 
 const { Pool } = pkg;
@@ -500,8 +505,13 @@ app.post("/chat", async (req, res) => {
         : null;
     const intent = await classifyIntent(userMessage);
     setSession(sessionId, { lastIntent: intent.intent });
-    const inventoryIntent = isInventoryQuery(userMessage) ||
+    const earlyAmenityIntent = detectAmenityKeyLoose(userMessage);
+    let inventoryIntent =
+      isInventoryQuery(userMessage) ||
       ["inventory_availability", "amenity_inventory", "policy"].includes(intent.intent);
+    if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(userMessage)) {
+      inventoryIntent = false;
+    }
 
     const tokenData = await getHostawayAccessToken();
     const accessToken = tokenData.access_token;
@@ -591,9 +601,7 @@ app.post("/chat", async (req, res) => {
         setSession(sessionId, { listingId });
       } else if (
         session?.listingId &&
-        !amenityIntent &&
-        !inventoryIntent &&
-        !followupAmenityKey
+        !inventoryIntent
       ) {
         // Only reuse session unit when user implies continuity (e.g., "same/that one")
         // or the message doesn't reference a generic unit category.
@@ -935,6 +943,12 @@ app.post("/chat", async (req, res) => {
       });
     }
 
+    const wantsNextAvailableWeekend =
+      listingId &&
+      /\bnext available weekend\b|\bnext weekend available\b|\bwhen.*next weekend\b|\bnext weekend\b.*\bavailable\b/i.test(
+        userMessage
+      );
+
     // If availability question AND user gave dates -> answer from Hostaway truth
     let dates = extractDates(userMessage);
     if (
@@ -948,13 +962,7 @@ app.post("/chat", async (req, res) => {
         dates = session.dates;
       }
     }
-    if (
-      !dates &&
-      listingId &&
-      /\bnext available weekend\b|\bnext weekend available\b|\bwhen.*next weekend\b/i.test(
-        userMessage
-      )
-    ) {
+    if (wantsNextAvailableWeekend) {
       const start = getTodayIso();
       const end = addDays(start, 180);
       const days = await fetchCalendarRange(listingId, start, end, accessToken);
@@ -977,7 +985,7 @@ app.post("/chat", async (req, res) => {
             `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${bookUrl}` +
             suggestLine +
             memoryNote,
-        });
+          });
       }
       return res.json({
         reply:
@@ -1030,6 +1038,18 @@ app.post("/chat", async (req, res) => {
           bookingLine +
           memoryNote,
       });
+    }
+
+    // Listing-level amenity questions
+    const listingAmenityKey = listingId ? detectAmenityKeyLoose(userMessage) : null;
+    if (listingId && listingAmenityKey) {
+      const listing = await fetchListingById(listingId, accessToken);
+      const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+      const has = hasAmenity(safe, listingAmenityKey);
+      const reply = has
+        ? `Yes — ${safe.name} has a ${listingAmenityKey}.`
+        : `No — ${safe.name} does not have a ${listingAmenityKey}.`;
+      return res.json({ reply: reply + `\n\nBook now: ${safe.bookingUrl}` + memoryNote });
     }
 
     // General Q&A: Fetch listing and build safe facts

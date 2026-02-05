@@ -34,6 +34,16 @@ export function detectAmenityKeys(message) {
   return [...keys];
 }
 
+export function detectAmenityKeyLoose(message) {
+  const msg = (message || "").toLowerCase();
+  for (const a of AMENITY_SYNONYMS) {
+    for (const p of a.patterns) {
+      if (msg.includes(p)) return a.key;
+    }
+  }
+  return null;
+}
+
 export function hasAmenity(safeListing, amenityKey) {
   const list = (safeListing?.amenities || []).map((x) => String(x).toLowerCase());
   return list.some((a) => a.includes(amenityKey));

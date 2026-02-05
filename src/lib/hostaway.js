@@ -3,6 +3,15 @@
 let listingsCache = { data: null, fetchedAt: 0 };
 let listingDetailsCache = new Map(); // id -> { data, fetchedAt }
 
+function hostawayFetch(url, options = {}) {
+  const method = String(options.method || "GET").toUpperCase();
+  const isTokenRequest = String(url).includes("/accessTokens");
+  if (method !== "GET" && !isTokenRequest) {
+    throw new Error(`Hostaway API is read-only. Blocked ${method} ${url}`);
+  }
+  return fetch(url, options);
+}
+
 /* ===============================
    HOSTAWAY AUTH
 ================================ */
@@ -14,7 +23,7 @@ export async function getHostawayAccessToken() {
     scope: "general",
   });
 
-  const resp = await fetch("https://api.hostaway.com/v1/accessTokens", {
+  const resp = await hostawayFetch("https://api.hostaway.com/v1/accessTokens", {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -41,7 +50,7 @@ export async function getListingsCached(accessToken) {
     return listingsCache.data;
   }
 
-  const resp = await fetch("https://api.hostaway.com/v1/listings", {
+  const resp = await hostawayFetch("https://api.hostaway.com/v1/listings", {
     method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -62,7 +71,7 @@ export async function getListingsCached(accessToken) {
 }
 
 export async function fetchListingById(listingId, accessToken) {
-  const resp = await fetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
+  const resp = await hostawayFetch(`https://api.hostaway.com/v1/listings/${listingId}`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -228,7 +237,7 @@ export async function fetchCalendarRange(listingId, startDate, endDate, accessTo
     `https://api.hostaway.com/v1/listings/${listingId}/calendar` +
     `?startDate=${startDate}&endDate=${endDate}`;
 
-  const resp = await fetch(url, {
+  const resp = await hostawayFetch(url, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${accessToken}`,
