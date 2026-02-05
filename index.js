@@ -677,6 +677,13 @@ app.post("/chat", async (req, res) => {
           listingId = session.listingId;
           memoryNote = "\n\n(Using your last unit from this session.)";
         }
+      } else if (
+        session?.listingId &&
+        looksLikeFollowupQuestion(userMessage) &&
+        !looksLikeGenericUnitReference(userMessage)
+      ) {
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
       } else if (session?.lastMessage && looksLikeSameMessageReference(userMessage)) {
         const fromLast = findListingIdFromMessage(session.lastMessage, listings);
         if (fromLast) {
@@ -851,6 +858,10 @@ app.post("/chat", async (req, res) => {
       );
       const skipAmenityInventory =
         policyIntentRaw === "pets" && !looksLikeListRequest && !amenityKeys.length && !unitType;
+      const availabilityAsked =
+        isAvailabilityQuestion(userMessage) ||
+        intent.intent === "availability" ||
+        session?.lastIntent === "availability";
 
       if (followupInventory?.type === "amenity") {
         if (!amenityKeys.length && followupInventory.amenityKeys) {
@@ -873,7 +884,17 @@ app.post("/chat", async (req, res) => {
         unitType ||
         intent.intent === "amenity_inventory"
       ) {
-        if (!skipAmenityInventory && (looksLikeListRequest || amenityKeys.length || unitType || intent.intent === "amenity_inventory")) {
+        if (
+          !skipAmenityInventory &&
+          !(
+            availabilityAsked &&
+            unitType &&
+            !amenityKeys.length &&
+            !amenityKey &&
+            !wantsPetFriendly
+          ) &&
+          (looksLikeListRequest || amenityKeys.length || unitType || intent.intent === "amenity_inventory")
+        ) {
         const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
         if (effectiveAmenityKeys.length) {
           setDebugHeader("AmenityKeys", effectiveAmenityKeys.join(","));

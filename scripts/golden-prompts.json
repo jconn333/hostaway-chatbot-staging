@@ -117,5 +117,68 @@
     "message": "Which units are open Feb 8–Feb 10?",
     "expectIncludes": ["2026-02-08", "2026-02-10"],
     "expectRegex": []
+  },
+  {
+    "name": "disambiguation",
+    "sessionId": "golden-disambig",
+    "message": "Is the lodge available next weekend?",
+    "expectIncludes": ["Which unit are you asking about?", "Possible matches"],
+    "expectRegex": []
+  },
+  {
+    "name": "disambiguation-followup",
+    "sessionId": "golden-disambig",
+    "message": "Joy Lodge Suite",
+    "expectOneOfIncludes": ["Joy Lodge Suite", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "policy-smoking",
+    "sessionId": "golden-policy",
+    "message": "Is smoking allowed?",
+    "expectOneOfIncludes": ["smoking", "Smoking", "non‑smoking", "no smoking"],
+    "expectRegex": []
+  },
+  {
+    "name": "policy-parties",
+    "sessionId": "golden-policy",
+    "message": "Are parties allowed?",
+    "expectOneOfIncludes": ["parties", "Parties", "party", "aren’t allowed", "not allowed"],
+    "expectRegex": []
+  },
+  {
+    "name": "checkin-time",
+    "sessionId": "golden-joy",
+    "message": "What time is check-in for Joy Lodge Suite?",
+    "expectOneOfIncludes": ["Check‑in", "Check-in"],
+    "expectRegex": []
+  },
+  {
+    "name": "checkout-time",
+    "sessionId": "golden-joy",
+    "message": "And checkout?",
+    "expectOneOfIncludes": ["Check‑out", "Check-out"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-inventory-fireplace",
+    "sessionId": "golden-amenities",
+    "message": "Which units have fireplaces?",
+    "expectIncludes": ["Units with"],
+    "expectRegex": []
+  },
+  {
+    "name": "amenity-inventory-jacuzzi",
+    "sessionId": "golden-amenities",
+    "message": "Which units have a jacuzzi?",
+    "expectIncludes": ["Units with"],
+    "expectRegex": []
+  },
+  {
+    "name": "booking-short",
+    "sessionId": "golden-soft",
+    "message": "Can I reserve Red Fern for next weekend?",
+    "expectOneOfIncludes": ["Book now:", "availability"],
+    "expectRegex": []
   }
 ]
