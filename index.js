@@ -52,6 +52,19 @@ const INTENT_MODEL = "gpt-4o-mini";
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, updatedAt }
 
+const metrics = {
+  requests_total: 0,
+  errors_total: 0,
+  intents: {},
+  availability_queries: 0,
+  policy_queries: 0,
+};
+
+function logEvent(type, data = {}) {
+  const base = { ts: new Date().toISOString(), type };
+  console.log(JSON.stringify({ ...base, ...data }));
+}
+
 function getSession(sessionId) {
   if (!sessionId) return null;
   const s = sessionStore.get(String(sessionId));
@@ -204,6 +217,13 @@ function renderStructuredReply(data) {
   return parts.join("\n");
 }
 
+function appendFollowupIfMissing(text, followup) {
+  const t = String(text || "").trimEnd();
+  if (!t) return followup;
+  if (/\?\s*$/.test(t)) return t;
+  return `${t}\n\n${followup}`;
+}
+
 function detectPolicyIntent(message) {
   const msg = (message || "").toLowerCase();
   if (msg.includes("pet")) return "pets";
@@ -338,6 +358,7 @@ async function mapWithConcurrency(items, limit, mapper) {
 
 function buildSafeSummary(safe) {
   if (!safe) return "I don’t have details for that unit yet.";
+  const MAX_SUMMARY_CHARS = 1200;
   const parts = [];
   parts.push(`Here’s a quick, friendly overview of ${safe.name}:`);
   if (safe.description) {
@@ -376,7 +397,9 @@ function buildSafeSummary(safe) {
   }
   if (safe.bookingUrl) parts.push(`\nBook now: ${safe.bookingUrl}`);
   parts.push("\nWould you like me to check availability or answer anything else?");
-  return parts.join("\n");
+  const text = parts.join("\n");
+  if (text.length <= MAX_SUMMARY_CHARS) return text;
+  return text.slice(0, MAX_SUMMARY_CHARS - 1).trimEnd() + "…";
 }
 
 function formatAmenityList(amenities, limit = 8) {
@@ -467,6 +490,18 @@ app.get("/", (req, res) => {
   res.send("Chatbot server is running 🚀");
 });
 
+app.get("/healthz", (req, res) => {
+  res.json({
+    ok: true,
+    uptime_sec: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/metrics", (req, res) => {
+  res.json(metrics);
+});
+
 /* ---------- SANDBOX UI ---------- */
 app.get("/sandbox", (req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -500,6 +535,7 @@ app.get("/session/debug", (req, res) => {
 /* ---------- CHAT ---------- */
 app.post("/chat", async (req, res) => {
   try {
+    metrics.requests_total += 1;
     const userMessage = req.body.message || "";
     let listingId = req.body.listingId || null;
     const sessionId = req.body.sessionId || req.headers["x-session-id"] || null;
@@ -521,8 +557,14 @@ app.post("/chat", async (req, res) => {
         ? session.lastInventory
         : null;
     const intent = await classifyIntent(userMessage);
+    metrics.intents[intent.intent] = (metrics.intents[intent.intent] || 0) + 1;
     setSession(sessionId, { lastIntent: intent.intent });
     setDebugHeader("Intent", intent.intent);
+    logEvent("chat_request", {
+      sessionId: sessionId || "anonymous",
+      listingId: listingId || null,
+      intent: intent.intent,
+    });
     const policyIntentRaw = detectPolicyIntent(userMessage);
     setDebugHeader("PolicyIntent", policyIntentRaw);
     const earlyAmenityIntent = detectAmenityKeyLoose(userMessage);
@@ -911,6 +953,7 @@ app.post("/chat", async (req, res) => {
         policyIntent = session.lastPolicyIntent;
       }
       if (policyIntent) {
+        metrics.policy_queries += 1;
         setSession(sessionId, { lastPolicyIntent: policyIntent });
         const results = await mapWithConcurrency(
           listings,
@@ -943,6 +986,11 @@ app.post("/chat", async (req, res) => {
                 generalized = generalized.replace(/at this property/i, "here");
               }
             }
+            logEvent("policy_response", {
+              sessionId: sessionId || "anonymous",
+              listingId: null,
+              policy: policyIntent,
+            });
             const uniform = nonNull.length === listings.length && counts.size === 1;
             if (uniform) {
               return res.json({ reply: generalized });
@@ -989,6 +1037,11 @@ app.post("/chat", async (req, res) => {
       );
 
     // If availability question AND user gave dates -> answer from Hostaway truth
+    const availabilityAsked =
+      isAvailabilityQuestion(userMessage) ||
+      intent.intent === "availability" ||
+      session?.lastIntent === "availability";
+    if (availabilityAsked) metrics.availability_queries += 1;
     let dates = extractDates(userMessage);
     if (
       !dates &&
@@ -1070,12 +1123,21 @@ app.post("/chat", async (req, res) => {
       const extraLines = [timeLine, minStayLine].filter(Boolean).join("\n");
 
       const bookingLine = bookUrl ? `\n\nBook now: ${bookUrl}` : "";
+      logEvent("availability_response", {
+        sessionId: sessionId || "anonymous",
+        listingId,
+        start: dates.start,
+        end: dates.end,
+        available: Boolean(data?.available),
+      });
       return res.json({
-        reply:
+        reply: appendFollowupIfMissing(
           (data.message || "Availability check complete.") +
-          (extraLines ? `\n${extraLines}` : "") +
-          bookingLine +
-          memoryNote,
+            (extraLines ? `\n${extraLines}` : "") +
+            bookingLine +
+            memoryNote,
+          "Would you like me to check other dates?"
+        ),
       });
     }
 
@@ -1107,6 +1169,7 @@ app.post("/chat", async (req, res) => {
       policyIntent = session.lastPolicyIntent;
     }
     if (policyIntent) {
+      metrics.policy_queries += 1;
       setSession(sessionId, { lastPolicyIntent: policyIntent });
       const fromRules = policyAnswerFromHouseRules(safe, policyIntent);
       const fromFacts = policyAnswerFromFacts(safe, policyIntent);
@@ -1114,7 +1177,17 @@ app.post("/chat", async (req, res) => {
       if (policyReply) {
         const bookingLine =
           safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
-        res.json({ reply: policyReply + bookingLine + memoryNote });
+        logEvent("policy_response", {
+          sessionId: sessionId || "anonymous",
+          listingId,
+          policy: policyIntent,
+        });
+        res.json({
+          reply: appendFollowupIfMissing(
+            policyReply + bookingLine + memoryNote,
+            "Want me to check a different unit?"
+          ),
+        });
         return;
       }
     }
@@ -1167,6 +1240,8 @@ app.post("/chat", async (req, res) => {
     setSession(sessionId, { lastMessage: userMessage });
   } catch (err) {
     console.error(err);
+    metrics.errors_total += 1;
+    logEvent("error", { message: String(err?.message || err) });
     res.status(500).json({ reply: "Something went wrong on the server." });
   }
 });
