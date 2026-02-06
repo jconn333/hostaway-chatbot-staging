@@ -47,7 +47,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const INVENTORY_AVAILABILITY_CONCURRENCY = 5;
 const INVENTORY_AVAILABILITY_MAX = 20;
 const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-4o-mini";
-const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-5-mini";
+const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, updatedAt }
