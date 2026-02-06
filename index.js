@@ -113,7 +113,11 @@ function looksLikeSameMessageReference(message) {
 function looksLikeFollowupQuestion(message) {
   const msg = (message || "").trim().toLowerCase();
   if (!msg) return false;
-  if (/^(what about|how about|and what|and how|and|also|ok|okay|so|then)\b/.test(msg)) {
+  if (
+    /^(?:(?:yes|yeah|yep|sure)\s+)?(what about|how about|and what|and how|and|also|ok|okay|so|then)\b/.test(
+      msg
+    )
+  ) {
     return true;
   }
   return /\b(what about that|what about those|that one|those ones|them|those|any others|which ones)\b/.test(
@@ -328,6 +332,97 @@ async function classifyIntent(message) {
     console.error("Intent classify error:", err);
   }
   return { intent: "general", confidence: 0 };
+}
+
+function heuristicIntent(message, policyIntent = null) {
+  if (isInventoryAvailabilityQuestion(message)) return "inventory_availability";
+  if (isAvailabilityQuestion(message)) return "availability";
+  if (detectAmenityQuery(message) || isInventoryQuery(message)) return "amenity_inventory";
+  if (policyIntent) return "policy";
+  if (looksLikeProximityQuery(message)) return "compare";
+  if (looksLikeSummaryRequest(message)) return "summary";
+  return "general";
+}
+
+function normalizePlannerOutput(parsed, message, policyIntent) {
+  const intentAllow = new Set([
+    "availability",
+    "inventory_availability",
+    "amenity_inventory",
+    "policy",
+    "compare",
+    "summary",
+    "general",
+  ]);
+  const scope = ["single_unit", "inventory"].includes(parsed?.scope)
+    ? parsed.scope
+    : "single_unit";
+  const intent = intentAllow.has(String(parsed?.intent || ""))
+    ? String(parsed.intent)
+    : heuristicIntent(message, policyIntent);
+  const confidence = Number(parsed?.confidence ?? 0);
+  const guestCount = Number(parsed?.guest_count);
+  return {
+    intent,
+    scope,
+    use_session_unit: Boolean(parsed?.use_session_unit),
+    policy_topic: parsed?.policy_topic ? String(parsed.policy_topic) : null,
+    unit_type: parsed?.unit_type ? String(parsed.unit_type).toLowerCase() : null,
+    guest_count: Number.isFinite(guestCount) && guestCount > 0 ? guestCount : null,
+    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+  };
+}
+
+async function planTurn(message, { sessionHasListing = false } = {}) {
+  const policyIntent = detectPolicyIntent(message);
+  const fallback = {
+    intent: heuristicIntent(message, policyIntent),
+    scope: isInventoryQuery(message) || isInventoryAvailabilityQuestion(message) ? "inventory" : "single_unit",
+    use_session_unit: sessionHasListing && looksLikeFollowupQuestion(message),
+    policy_topic: policyIntent,
+    unit_type: detectUnitType(message),
+    guest_count: extractCapacityQuery(message)?.sleeps || null,
+    confidence: 0,
+  };
+
+  try {
+    const resp = await client.responses.create({
+      model: INTENT_MODEL,
+      instructions:
+        "Return JSON only. You are a planner for a lodging chatbot. " +
+        "Classify the user turn and extract routing fields. " +
+        "Schema: {" +
+        "\"intent\":\"availability|inventory_availability|amenity_inventory|policy|compare|summary|general\"," +
+        "\"scope\":\"single_unit|inventory\"," +
+        "\"use_session_unit\":boolean," +
+        "\"policy_topic\":\"pets|smoking|parties|noise|checkin|checkout|cancellation|null\"," +
+        "\"unit_type\":\"treehouse|cabin|suite|lodge|cottage|tiny home|null\"," +
+        "\"guest_count\":number|null," +
+        "\"confidence\":number" +
+        "}. " +
+        "Prefer inventory scope for broad asks like groups/capacity, generic 'any units', or list/filter asks. " +
+        "Prefer use_session_unit=true for pronoun follow-ups about an already selected unit.",
+      input: [
+        {
+          role: "user",
+          content: `sessionHasListing=${sessionHasListing ? "true" : "false"}\nmessage=${String(
+            message || ""
+          )}`,
+        },
+      ],
+    });
+    const raw = resp.output_text || "";
+    const cleaned = raw
+      .trim()
+      .replace(/^```(?:json)?/i, "")
+      .replace(/```$/i, "")
+      .trim();
+    const parsed = JSON.parse(cleaned);
+    return normalizePlannerOutput(parsed, message, policyIntent);
+  } catch (err) {
+    console.error("Planner error:", err);
+    return fallback;
+  }
 }
 
 function renderStructuredReply(data) {
@@ -915,7 +1010,25 @@ app.post("/chat", async (req, res) => {
         : null;
     const directBookingRequest = isDirectBookingRequest(normalizedMessage);
     const intent = await classifyIntent(normalizedMessage);
-    const policyIntentRaw = detectPolicyIntent(normalizedMessage);
+    const plannerHintsEnabled = String(process.env.ENABLE_PLANNER_HINTS || "0") === "1";
+    const plan = plannerHintsEnabled
+      ? await planTurn(normalizedMessage, {
+          sessionHasListing: Boolean(session?.listingId),
+        })
+      : {
+          intent: "general",
+          scope:
+            isInventoryQuery(normalizedMessage) ||
+            isInventoryAvailabilityQuestion(normalizedMessage)
+              ? "inventory"
+              : "single_unit",
+          use_session_unit: Boolean(session?.listingId) && looksLikeFollowupQuestion(userMessage),
+          policy_topic: null,
+          unit_type: detectUnitType(normalizedMessage),
+          guest_count: extractCapacityQuery(normalizedMessage)?.sleeps || null,
+          confidence: 0,
+        };
+    const policyIntentRaw = plan.policy_topic || detectPolicyIntent(normalizedMessage);
     const modelIntent = intent.intent || "general";
     const modelConfidence = Number(intent.confidence ?? 0);
     const lowConfidence = Number.isFinite(modelConfidence) && modelConfidence > 0 && modelConfidence < 0.45;
@@ -959,12 +1072,18 @@ app.post("/chat", async (req, res) => {
       modelConfidence,
     });
     setDebugHeader("PolicyIntent", policyIntentRaw);
+    setDebugHeader("PlanScope", plan.scope);
+    setDebugHeader("PlanUseSession", plan.use_session_unit);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
     const capacityFactQuestion = isCapacityFactQuestion(normalizedMessage);
-    const capacityQuery = extractCapacityQuery(normalizedMessage);
+    let capacityQuery = extractCapacityQuery(normalizedMessage);
+    if (!capacityQuery && Number.isFinite(plan.guest_count) && plan.guest_count > 0) {
+      capacityQuery = { sleeps: plan.guest_count };
+    }
     let inventoryIntent =
       isInventoryQuery(normalizedMessage) ||
-      ["inventory_availability", "amenity_inventory", "policy"].includes(effectiveIntent);
+      ["inventory_availability", "amenity_inventory"].includes(effectiveIntent) ||
+      (effectiveIntent === "policy" && looksLikeInventoryWidePolicyRequest(normalizedMessage));
     if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(normalizedMessage)) {
       inventoryIntent = false;
     }
@@ -1209,12 +1328,20 @@ app.post("/chat", async (req, res) => {
       const detected = inventoryIntent
         ? findListingIdFromMessageStrong(normalizedMessage, listings)
         : findListingIdFromMessage(normalizedMessage, listings);
-        if (detected) {
-          listingId = detected;
-          setSession(sessionId, { listingId });
-        } else if (session?.listingId && directBookingRequest) {
-          listingId = session.listingId;
-          memoryNote = "\n\n(Using your last unit from this session.)";
+      if (detected) {
+        listingId = detected;
+        setSession(sessionId, { listingId });
+      } else if (
+        session?.listingId &&
+        plan.use_session_unit &&
+        !inventoryIntent &&
+        !looksLikeInventoryWidePolicyRequest(normalizedMessage)
+      ) {
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
+      } else if (session?.listingId && directBookingRequest) {
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
         } else if (
           session?.listingId &&
           capacityFactQuestion &&
