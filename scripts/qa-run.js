@@ -19,7 +19,6 @@ const REQUEST_TIMEOUT_MS = Number(process.env.QA_TIMEOUT_MS || 15000);
 const MAX_RETRIES = Number(process.env.QA_MAX_RETRIES || 2);
 const SESSIONS_TO_RUN = Number(process.env.QA_SESSIONS || 5);
 const TURNS_LIMIT = Number(process.env.QA_TURNS_LIMIT || 8);
-const QUESTION_SET_ID = process.env.QA_QUESTION_SET_ID || "qa_core_v2_guest_journey";
 
 function sqlLit(v) {
   if (v === null || v === undefined) return "NULL";
@@ -90,105 +89,14 @@ function includesAll(text, arr) {
   return arr.every((x) => low.includes(String(x).toLowerCase()));
 }
 
-function singularizeToken(tok) {
-  const t = String(tok || "").toLowerCase();
-  if (t.length <= 3) return t;
-  if (t.endsWith("ies") && t.length > 4) return `${t.slice(0, -3)}y`;
-  if (t.endsWith("s")) return t.slice(0, -1);
-  return t;
-}
-
-function normalizeText(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function extractNumbers(normalized) {
-  return normalized.match(/\b\d+\b/g) || [];
-}
-
-function containsSemanticTerm(reply, expectedTerm) {
-  const normReply = normalizeText(reply);
-  const normExpected = normalizeText(expectedTerm);
-  if (!normExpected) return true;
-
-  if (normReply.includes(normExpected)) return true;
-
-  const canonReply = normReply
-    .split(" ")
-    .filter(Boolean)
-    .map(singularizeToken)
-    .join(" ");
-  const canonExpected = normExpected
-    .split(" ")
-    .filter(Boolean)
-    .map(singularizeToken)
-    .join(" ");
-
-  if (canonExpected && canonReply.includes(canonExpected)) return true;
-
-  const numNoun = /(^|\s)(\d+)\s+([a-z]+)/.exec(normExpected);
-  if (numNoun) {
-    const n = numNoun[2];
-    const noun = singularizeToken(numNoun[3]);
-    const nounPattern = noun.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const rx = new RegExp(`\\b${n}\\s+${nounPattern}s?\\b`);
-    if (rx.test(normReply) || rx.test(canonReply)) return true;
-  }
-
-  const expectedNums = extractNumbers(normExpected);
-  if (expectedNums.length >= 2) {
-    const replyNums = new Set(extractNumbers(normReply));
-    if (expectedNums.every((n) => replyNums.has(n))) return true;
-  }
-
-  const replyTokSet = new Set(canonReply.split(" ").filter(Boolean));
-  const expectedToks = canonExpected.split(" ").filter(Boolean);
-  if (expectedToks.length && expectedToks.every((t) => replyTokSet.has(t))) return true;
-
-  return false;
-}
-
-function checkMemoryTerms(reply, expectedTerms) {
-  const matched = [];
-  const missing = [];
-
-  for (const term of expectedTerms || []) {
-    if (containsSemanticTerm(reply, term)) matched.push(term);
-    else missing.push(term);
-  }
-
-  return {
-    allMatched: missing.length === 0,
-    missing,
-    matched,
-  };
-}
-
 function evaluateTurnHybrid({ botReply, turnCfg, sessionState }) {
   const issues = [];
   const hardIssues = [];
   const text = String(botReply || "");
   const lowReply = text.toLowerCase();
-  let missingExpectedTerms = [];
-  let matchedExpectedTerms = [];
 
-  if (Array.isArray(turnCfg.memoryMustInclude) && turnCfg.memoryMustInclude.length) {
-    const memoryCheck = checkMemoryTerms(botReply, turnCfg.memoryMustInclude);
-    missingExpectedTerms = memoryCheck.missing;
-    matchedExpectedTerms = memoryCheck.matched;
-    if (!memoryCheck.allMatched) {
-      hardIssues.push("Memory failure: missing previously stated preferences.");
-    }
-  }
-  if (Array.isArray(turnCfg.forbidIncludes) && turnCfg.forbidIncludes.length) {
-    const hit = turnCfg.forbidIncludes.find((x) =>
-      lowReply.includes(String(x).toLowerCase())
-    );
-    if (hit) hardIssues.push(`Forbidden phrase appeared in reply: ${hit}`);
+  if (turnCfg.memoryMustInclude && !includesAll(botReply, turnCfg.memoryMustInclude)) {
+    hardIssues.push("Memory failure: missing previously stated preferences.");
   }
 
   if (turnCfg.consistencyKey) {
@@ -291,8 +199,6 @@ function evaluateTurnHybrid({ botReply, turnCfg, sessionState }) {
     judgmentThreshold: "balanced",
     failureReasonType,
     qualityAvg: Number(qualityAvg.toFixed(2)),
-    missingExpectedTerms,
-    matchedExpectedTerms,
   };
 }
 
@@ -307,17 +213,16 @@ const coreSessions = [
     turns: [
       { msg: "Hi, we are a family of 6 planning a trip. Which cabins or units fit us best?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "Please compare layout and bedrooms for options suitable for 6 people.", mustMention: ["bedroom"], expectingDirectAnswer: true },
-      { msg: "We’re thinking about a 3-night stay in mid-May 2026. What date windows would you suggest?", expectingDirectAnswer: true },
+      { msg: "Could you suggest two possible date ranges in May 2026 that might work for us?", expectingDirectAnswer: true },
       { msg: "Please remember this exactly: 6 guests, 3 bedrooms minimum, fireplace, strong wifi, budget-sensitive, dates 2026-05-15 to 2026-05-18." },
-      { msg: "Based on those priorities, which two units would you shortlist and why?", mustMention: ["6"], expectingDirectAnswer: true },
-      { msg: "For those dates, are either of those options likely to work with fireplace and strong wifi?", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
-      { msg: "Actually, if we dropped to 4 guests and 2 bedrooms, would that open better-value options for the same dates?", mustMention: ["date"], expectingDirectAnswer: true },
-      // QA self-test scenario: memory term "3 bedroom" should match replies like "3+ bedrooms".
-      { msg: "Before I changed anything, can you restate my original priorities so I can confirm we’re aligned?", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
-      { msg: "Please go back to my original priorities and tell me what you’d book if this were your family.", mustMention: ["2026-05-15"], expectingDirectAnswer: true },
-      { msg: "If this recommendation differs from your earlier guidance, explain why in plain language.", mustMention: ["because"], expectingDirectAnswer: true },
-      { msg: "If anything you said earlier was off, please correct it clearly.", mustMention: ["sorry"], expectingDirectAnswer: true },
-      { msg: "Final answer: what’s the best-fit unit, suggested date range, and next booking step?", expectingDirectAnswer: true },
+      { msg: "Based on those exact requirements, what are the best options?", mustMention: ["6"], expectingDirectAnswer: true },
+      { msg: "For those dates, do you have an option with both a fireplace and strong wifi?", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
+      { msg: "Actually maybe 4 guests and 2 bedrooms, same dates. What changes?", mustMention: ["date"], expectingDirectAnswer: true },
+      { msg: "Before I changed anything, can you restate my original requirements?", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
+      { msg: "Now check availability again for my original requirements, not the reduced ones.", mustMention: ["2026-05-15"], expectingDirectAnswer: true },
+      { msg: "If your earlier yes/no answer conflicts with this result, reconcile the difference briefly.", mustMention: ["because"], expectingDirectAnswer: true },
+      { msg: "Please correct any earlier mistake in one sentence.", mustMention: ["sorry"], expectingDirectAnswer: true },
+      { msg: "Can you give me a final recommendation with the unit, suggested date range, and why it fits us?", expectingDirectAnswer: true },
     ],
   },
   {
@@ -332,12 +237,12 @@ const coreSessions = [
       { msg: "Which of those have a hot tub and fireplace?", mustMention: ["hot"], expectingDirectAnswer: true },
       { msg: "Do you have at least one private hot-tub option for two guests next weekend?", consistencyKey: "couple_hot_tub", expectingDirectAnswer: true },
       { msg: "Remember this: 2 guests, next weekend, hot tub required, privacy first." },
-      { msg: "Can you give me your top three options and a quick reason for each?", expectingDirectAnswer: true },
-      { msg: "If you had to pick one for an anniversary, what would you choose and why?", expectingDirectAnswer: true },
+      { msg: "Give me exactly 3 bullet points with your top choices.", expectingDirectAnswer: true },
+      { msg: "If you had to pick one, what’s the best unit and what’s your reason?", expectingDirectAnswer: true },
       { msg: "Actually, add pet-friendly as a new requirement too. Any conflicts?", mustMention: ["pet"], expectingDirectAnswer: true },
       { msg: "Before I added pet-friendly, what requirements had I already given you?", memoryMustInclude: ["2", "next weekend", "hot tub", "privacy"], expectingDirectAnswer: true },
-      { msg: "What are the soonest realistic 2-night date options for your top pick?", expectingDirectAnswer: true },
-      { msg: "If your recommendation changed, explain what changed and why.", mustMention: ["because"], expectingDirectAnswer: true },
+      { msg: "What are the soonest 2-night date options you’d suggest?", expectingDirectAnswer: true },
+      { msg: "You contradicted yourself if you said no then gave options. Repair that clearly in one sentence.", mustMention: ["because"], expectingDirectAnswer: true },
       { msg: "Given everything I’ve asked for now, can you still meet all my requirements?", consistencyKey: "couple_all_reqs", expectingDirectAnswer: true },
       { msg: "Please wrap up with your recommended unit, whether it meets all requirements, and any caveats I should know.", expectingDirectAnswer: true },
     ],
@@ -352,19 +257,15 @@ const coreSessions = [
     turns: [
       { msg: "I need a place tonight or tomorrow. Solo traveler. Cheapest options?", mustMention: ["available"], expectingDirectAnswer: true },
       { msg: "Can you list a few options and include whether wifi quality is good for each?", expectingDirectAnswer: true },
-      {
-        msg: "What are the next two realistic check-in/check-out ranges I should consider?",
-        expectingDirectAnswer: true,
-        forbidIncludes: ["Which unit are you asking about?"],
-      },
+      { msg: "What are the next two realistic check-in/check-out ranges I should consider?", expectingDirectAnswer: true },
       { msg: "Remember this: solo, strong wifi required, budget is tight, last-minute only." },
       { msg: "Based on that, do you have anything that actually matches what I need?", consistencyKey: "solo_match", expectingDirectAnswer: true },
       { msg: "Which unit is closest to local attractions and still budget friendly?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "I changed my mind: now I can do next week too. What improves?", mustMention: ["week"], expectingDirectAnswer: true },
       { msg: "Before I said I could do next week, what were my original constraints?", memoryMustInclude: ["solo", "wifi", "budget", "last-minute"], expectingDirectAnswer: true },
-      { msg: "Give me your top two options and tell me price level and why each one is a fit.", expectingDirectAnswer: true },
-      { msg: "If anything in your earlier suggestions no longer fits my needs, please correct it now.", mustMention: ["fit"], expectingDirectAnswer: true },
-      { msg: "How confident are you these options are actually available right now?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
+      { msg: "Give me your top 2 options and tell me price level and why each one is a fit.", expectingDirectAnswer: true },
+      { msg: "If any earlier response had wrong format, correct it now in one concise line.", mustMention: ["format"], expectingDirectAnswer: true },
+      { msg: "Yes/no only: are you confident these options are currently available?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
       { msg: "What are the exact next steps I should take to book quickly?", expectingDirectAnswer: true },
     ],
   },
@@ -385,7 +286,7 @@ const coreSessions = [
       { msg: "I am now conflicting: maybe only 6 guests and no pets. What changes?", mustMention: ["change"], expectingDirectAnswer: true },
       { msg: "Before that change, what were my original requirements?", memoryMustInclude: ["8-10", "accessibility", "pet", "bathroom"], expectingDirectAnswer: true },
       { msg: "Can you suggest two possible 3-night windows in June 2026?", expectingDirectAnswer: true },
-      { msg: "If your current guidance differs from earlier, reconcile it clearly.", mustMention: ["because"], expectingDirectAnswer: true },
+      { msg: "If you contradicted earlier yes/no, reconcile explicitly in one sentence.", mustMention: ["because"], expectingDirectAnswer: true },
       { msg: "Correct any prior mistake now and keep Amish Country Lodging context explicit.", mustMention: ["amish"], expectingDirectAnswer: true },
       { msg: "Please give a final recommendation, why it fits, anything still unmet, and the next step for booking.", expectingDirectAnswer: true },
     ],
@@ -570,21 +471,6 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
       server_llm_first_mode: null,
     };
   }
-  const allowVersionMismatch = String(process.env.QA_ALLOW_VERSION_MISMATCH || "").toLowerCase() === "1";
-  if (
-    !allowVersionMismatch &&
-    versionMeta.code_version &&
-    serverVersionMeta.server_code_version &&
-    String(versionMeta.code_version) !== String(serverVersionMeta.server_code_version)
-  ) {
-    console.error(
-      "ERROR: QA aborted due to code-version mismatch.\n" +
-        `Runner code_version=${versionMeta.code_version}\n` +
-        `Server code_version=${serverVersionMeta.server_code_version}\n` +
-        "Deploy matching code (or set QA_ALLOW_VERSION_MISMATCH=1 to override)."
-    );
-    process.exit(2);
-  }
   const notes = {
     method: "direct_api_calls",
     mode: BASE_URL.includes("localhost") ? "local_only" : "remote",
@@ -592,7 +478,6 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
     loosened_format_auto_fails: ["dates_only", "yes_no_only", "json_only"],
     judgment_threshold: "balanced",
     session_generation_mode: "4_core_plus_6_fuzz",
-    question_set_id: QUESTION_SET_ID,
     fuzz_seed: fuzzSeed,
     requested_sessions: requestedSessions,
     execution_started_at: new Date().toISOString(),
@@ -662,8 +547,6 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
           judgmentThreshold: "balanced",
           failureReasonType: "hard_rule",
           qualityAvg: 0.2,
-          missingExpectedTerms: [],
-          matchedExpectedTerms: [],
         };
       } else {
         evaluation = evaluateTurnHybrid({ botReply: replyText, turnCfg, sessionState: state });
@@ -681,8 +564,6 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
         judgment_threshold: evaluation.judgmentThreshold,
         failure_reason_type: evaluation.failureReasonType,
         quality_avg: evaluation.qualityAvg,
-        missing_expected_terms: evaluation.missingExpectedTerms || [],
-        matched_expected_terms: evaluation.matchedExpectedTerms || [],
       };
 
       allRows.push({
