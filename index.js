@@ -417,6 +417,23 @@ function formatCheckTimes(safe) {
   return `Check‑in ${ci || "time varies"}${co ? `, ${co}` : ""}.`;
 }
 
+function shouldIncludeAvailabilityDetails(message, policyIntentRaw, reasonCode) {
+  const msg = String(message || "").toLowerCase();
+  const asksTimes =
+    policyIntentRaw === "checkin" ||
+    policyIntentRaw === "checkout" ||
+    /\bcheck[- ]?in\b|\bcheck[- ]?out\b|\bcheckout\b|\barrival\b|\bdeparture\b|\bwhat time\b/.test(msg);
+  const asksMinStay =
+    /\bminimum\b|\bmin(?:imum)?\s*stay\b|\bmin(?:imum)?\s*nights?\b|\bnight minimum\b|\bhow many nights\b/.test(
+      msg
+    );
+  const blockedByMinStay = reasonCode === "minimum_stay";
+  return {
+    includeTimes: asksTimes,
+    includeMinStay: asksMinStay || blockedByMinStay,
+  };
+}
+
 function formatCheckInRange(start, end) {
   const s = formatTime12(start);
   const e = formatTime12(end);
@@ -1244,9 +1261,10 @@ app.post("/chat", async (req, res) => {
         bookUrl = `${safe.bookingUrl}${sep}start=${dates.start}&end=${dates.end}`;
       }
 
-      const timeLine = formatCheckTimes(safe);
+      const details = shouldIncludeAvailabilityDetails(userMessage, policyIntentRaw, data?.reasonCode);
+      const timeLine = details.includeTimes ? formatCheckTimes(safe) : "";
       const minStayLine =
-        safe.minNights != null
+        details.includeMinStay && safe.minNights != null
           ? `Minimum stay: ${safe.minNights} ${safe.minNights === 1 ? "night" : "nights"}.`
           : "";
       const extraLines = [timeLine, minStayLine].filter(Boolean).join("\n");
