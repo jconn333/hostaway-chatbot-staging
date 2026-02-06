@@ -38,3 +38,11 @@
   - policy
   - amenity inventory
 
+## Golden Layers
+- Baseline deterministic regression suite:
+  - `npm run golden:core` (fast PR gate)
+  - `npm run golden:full` (full fixed prompt set)
+- Matrix parameterized suite:
+  - `npm run golden:matrix` (unit-rotated prompt templates)
+- Combined nightly coverage:
+  - `npm run golden:all` (baseline full + matrix)

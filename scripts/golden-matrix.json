@@ -1,0 +1,58 @@
+[
+  {
+    "name": "matrix-about",
+    "sessionId": "golden-matrix-about",
+    "message": "Tell me about {{unit_name}}",
+    "expectIncludes": ["{{unit_name}}", "Book now:"],
+    "expectRegex": [],
+    "expectOneOfIncludes": [],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  },
+  {
+    "name": "matrix-hot-tub",
+    "sessionId": "golden-matrix-hot-tub",
+    "message": "Does {{unit_name}} have a hot tub?",
+    "expectIncludes": ["{{unit_name}}"],
+    "expectRegex": [],
+    "expectOneOfIncludes": ["hot tub", "doesn't have", "does not have", "jacuzzi"],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  },
+  {
+    "name": "matrix-checkin",
+    "sessionId": "golden-matrix-checkin",
+    "message": "What time is check-in for {{unit_name}}?",
+    "expectIncludes": [],
+    "expectRegex": ["Check.?in"],
+    "expectOneOfIncludes": ["15", "21", "Book now:"],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  },
+  {
+    "name": "matrix-smoking",
+    "sessionId": "golden-matrix-smoking",
+    "message": "Is smoking allowed at {{unit_name}}?",
+    "expectIncludes": [],
+    "expectRegex": [],
+    "expectOneOfIncludes": ["smoking", "non‑smoking", "non-smoking", "no smoking"],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  }
+]

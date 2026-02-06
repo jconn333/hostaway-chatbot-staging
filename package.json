@@ -13,6 +13,8 @@
     "golden": "node scripts/golden-run.js",
     "golden:core": "GOLDEN_MODE=core node scripts/golden-run.js",
     "golden:full": "GOLDEN_MODE=full node scripts/golden-run.js",
+    "golden:matrix": "GOLDEN_SUITE=matrix node scripts/golden-run.js",
+    "golden:all": "GOLDEN_SUITE=all GOLDEN_MODE=full node scripts/golden-run.js",
     "monitor:synthetic": "node scripts/synthetic-monitor.js"
   },
   "keywords": [],

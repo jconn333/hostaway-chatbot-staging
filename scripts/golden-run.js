@@ -2,8 +2,10 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
-const TESTS_PATH = new URL("./golden-prompts.json", import.meta.url);
+const BASELINE_TESTS_PATH = new URL("./golden-prompts.json", import.meta.url);
+const MATRIX_TESTS_PATH = new URL("./golden-matrix.json", import.meta.url);
 const GOLDEN_MODE = (process.env.GOLDEN_MODE || "full").toLowerCase();
+const GOLDEN_SUITE = (process.env.GOLDEN_SUITE || "baseline").toLowerCase();
 const CORE_TESTS = new Set([
   "availability-weekend",
   "amenity-followup",
@@ -21,6 +23,32 @@ const CORE_TESTS = new Set([
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function renderTemplate(template, vars) {
+  return String(template).replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_m, key) => {
+    return vars[key] ?? "";
+  });
+}
+
+function expandMatrixSpecs(specs) {
+  const expanded = [];
+  for (const spec of specs) {
+    for (const unit of spec.units || []) {
+      const vars = {
+        unit_name: unit.unit_name,
+      };
+      expanded.push({
+        name: `${spec.name}-${unit.slug}`,
+        sessionId: `${spec.sessionId}-${unit.slug}`,
+        message: renderTemplate(spec.message, vars),
+        expectIncludes: (spec.expectIncludes || []).map((v) => renderTemplate(v, vars)),
+        expectRegex: (spec.expectRegex || []).map((v) => renderTemplate(v, vars)),
+        expectOneOfIncludes: (spec.expectOneOfIncludes || []).map((v) => renderTemplate(v, vars)),
+      });
+    }
+  }
+  return expanded;
 }
 
 async function postChat(message, sessionId) {
@@ -64,13 +92,37 @@ function expectOneOfIncludes(reply, values = []) {
   return `Expected reply to include one of: ${values.join(" | ")}`;
 }
 
-async function run() {
-  const raw = await readFile(TESTS_PATH, "utf8");
-  const allTests = JSON.parse(raw);
-  const tests =
+async function loadTests() {
+  const baselineRaw = await readFile(BASELINE_TESTS_PATH, "utf8");
+  const baselineAllTests = JSON.parse(baselineRaw);
+  const baselineTests =
     GOLDEN_MODE === "core"
-      ? allTests.filter((t) => CORE_TESTS.has(t.name))
-      : allTests;
+      ? baselineAllTests.filter((t) => CORE_TESTS.has(t.name))
+      : baselineAllTests;
+
+  if (GOLDEN_SUITE === "baseline") {
+    return baselineTests;
+  }
+
+  const matrixRaw = await readFile(MATRIX_TESTS_PATH, "utf8");
+  const matrixSpecs = JSON.parse(matrixRaw);
+  const matrixTests = expandMatrixSpecs(matrixSpecs);
+
+  if (GOLDEN_SUITE === "matrix") {
+    return matrixTests;
+  }
+
+  if (GOLDEN_SUITE === "all") {
+    return [...baselineTests, ...matrixTests];
+  }
+
+  throw new Error(
+    `Unsupported GOLDEN_SUITE="${GOLDEN_SUITE}". Use baseline, matrix, or all.`
+  );
+}
+
+async function run() {
+  const tests = await loadTests();
 
   let server = null;
   if (!process.env.BASE_URL) {
@@ -106,11 +158,15 @@ async function run() {
   }
 
   if (failed > 0) {
-    console.error(`\n❌ Golden prompts failed: ${failed} failing test(s), ${passed} passing test(s)`);
+    console.error(
+      `\n❌ Golden prompts failed: ${failed} failing test(s), ${passed} passing test(s)`
+    );
     process.exit(1);
   }
 
-  console.log(`\n✅ Golden prompts PASSED (${passed} tests, mode=${GOLDEN_MODE})`);
+  console.log(
+    `\n✅ Golden prompts PASSED (${passed} tests, mode=${GOLDEN_MODE}, suite=${GOLDEN_SUITE})`
+  );
 }
 
 run().catch((err) => {
