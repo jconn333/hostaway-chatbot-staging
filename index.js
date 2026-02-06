@@ -389,8 +389,8 @@ async function planTurn(message, { sessionHasListing = false } = {}) {
     const resp = await client.responses.create({
       model: INTENT_MODEL,
       instructions:
-        "Return JSON only. You are a planner for a lodging chatbot. " +
-        "Classify the user turn and extract routing fields. " +
+        "Return JSON only. You are the intent planner for a lodging chatbot. " +
+        "Infer user goal, scope, and key slots for deterministic tool execution. " +
         "Schema: {" +
         "\"intent\":\"availability|inventory_availability|amenity_inventory|policy|compare|summary|general\"," +
         "\"scope\":\"single_unit|inventory\"," +
@@ -400,8 +400,11 @@ async function planTurn(message, { sessionHasListing = false } = {}) {
         "\"guest_count\":number|null," +
         "\"confidence\":number" +
         "}. " +
-        "Prefer inventory scope for broad asks like groups/capacity, generic 'any units', or list/filter asks. " +
-        "Prefer use_session_unit=true for pronoun follow-ups about an already selected unit.",
+        "Rules: " +
+        "1) Broad asks like 'any units', 'which units', capacity-only group asks, and amenity list/filter asks are inventory scope. " +
+        "2) Pronoun follow-ups ('it', 'that one', 'what about') should set use_session_unit=true when sessionHasListing=true unless user asks inventory-wide. " +
+        "3) Prefer availability intent only when dates/availability semantics are present; otherwise keep facts/policy/summary intents. " +
+        "4) If uncertain, lower confidence instead of guessing.",
       input: [
         {
           role: "user",
@@ -423,6 +426,26 @@ async function planTurn(message, { sessionHasListing = false } = {}) {
     console.error("Planner error:", err);
     return fallback;
   }
+}
+
+function chooseIntentFromPlannerAndClassifier(planner, classifier, message, policyIntent) {
+  const plannerIntent = planner?.intent || "general";
+  const plannerConfidence = Number(planner?.confidence ?? 0);
+  const classifierIntent = classifier?.intent || "general";
+  const classifierConfidence = Number(classifier?.confidence ?? 0);
+  const heuristic = heuristicIntent(message, policyIntent);
+
+  // Trust planner when it's confident and specific; otherwise use classifier.
+  if (plannerConfidence >= 0.7 && plannerIntent !== "general") {
+    return { intent: plannerIntent, confidence: plannerConfidence, source: "planner" };
+  }
+
+  // Classifier remains the safety net for ambiguous planner outputs.
+  if (classifierConfidence > 0) {
+    return { intent: classifierIntent, confidence: classifierConfidence, source: "classifier" };
+  }
+
+  return { intent: heuristic, confidence: 0, source: "heuristic" };
 }
 
 function renderStructuredReply(data) {
@@ -1009,9 +1032,8 @@ app.post("/chat", async (req, res) => {
         ? session.lastInventory
         : null;
     const directBookingRequest = isDirectBookingRequest(normalizedMessage);
-    const intent = await classifyIntent(normalizedMessage);
-    const plannerHintsEnabled = String(process.env.ENABLE_PLANNER_HINTS || "0") === "1";
-    const plan = plannerHintsEnabled
+    const llmFirstEnabled = String(process.env.LLM_FIRST_MODE || "1") === "1";
+    const plan = llmFirstEnabled
       ? await planTurn(normalizedMessage, {
           sessionHasListing: Boolean(session?.listingId),
         })
@@ -1028,9 +1050,16 @@ app.post("/chat", async (req, res) => {
           guest_count: extractCapacityQuery(normalizedMessage)?.sleeps || null,
           confidence: 0,
         };
+    const intent = await classifyIntent(normalizedMessage);
     const policyIntentRaw = plan.policy_topic || detectPolicyIntent(normalizedMessage);
-    const modelIntent = intent.intent || "general";
-    const modelConfidence = Number(intent.confidence ?? 0);
+    const chosen = chooseIntentFromPlannerAndClassifier(
+      plan,
+      intent,
+      normalizedMessage,
+      policyIntentRaw
+    );
+    const modelIntent = chosen.intent || "general";
+    const modelConfidence = Number(chosen.confidence ?? 0);
     const lowConfidence = Number.isFinite(modelConfidence) && modelConfidence > 0 && modelConfidence < 0.45;
     const heuristicSupports =
       isInventoryAvailabilityQuestion(normalizedMessage) ||
@@ -1072,6 +1101,7 @@ app.post("/chat", async (req, res) => {
       modelConfidence,
     });
     setDebugHeader("PolicyIntent", policyIntentRaw);
+    setDebugHeader("IntentSource", chosen.source);
     setDebugHeader("PlanScope", plan.scope);
     setDebugHeader("PlanUseSession", plan.use_session_unit);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
@@ -1081,6 +1111,7 @@ app.post("/chat", async (req, res) => {
       capacityQuery = { sleeps: plan.guest_count };
     }
     let inventoryIntent =
+      (chosen.source === "planner" && plan.scope === "inventory") ||
       isInventoryQuery(normalizedMessage) ||
       ["inventory_availability", "amenity_inventory"].includes(effectiveIntent) ||
       (effectiveIntent === "policy" && looksLikeInventoryWidePolicyRequest(normalizedMessage));
@@ -1093,7 +1124,9 @@ app.post("/chat", async (req, res) => {
     if (session?.listingId && directBookingRequest) {
       inventoryIntent = false;
     }
-    const inventoryCapacityIntent = Boolean(capacityQuery) && inventoryIntent;
+    const inventoryCapacityIntent =
+      Boolean(capacityQuery) &&
+      (inventoryIntent || (chosen.source === "planner" && plan.scope === "inventory"));
     setDebugHeader("InventoryIntent", inventoryIntent);
 
     const tokenData = await getHostawayAccessToken();
@@ -1325,9 +1358,11 @@ app.post("/chat", async (req, res) => {
         // Avoid false numeric listing matches (e.g. "group of 10" -> "Cottage #10")
         setDebugHeader("ListingDetect", "skipped_inventory_capacity");
       } else {
-      const detected = inventoryIntent
-        ? findListingIdFromMessageStrong(normalizedMessage, listings)
-        : findListingIdFromMessage(normalizedMessage, listings);
+      // Even in inventory mode, keep a loose fallback so partial explicit unit mentions
+      // like "Red Fern" still bind to a single listing when clearly present.
+      const detectedStrong = findListingIdFromMessageStrong(normalizedMessage, listings);
+      const detectedLoose = findListingIdFromMessage(normalizedMessage, listings);
+      const detected = inventoryIntent ? detectedStrong || detectedLoose : detectedLoose;
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });

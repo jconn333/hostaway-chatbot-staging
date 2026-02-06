@@ -58,7 +58,6 @@ export function findListingIdFromMessage(message, listings) {
   const pluralUnitWords = /\b(cabins|units|suites|lodges|places|properties|rentals|listings)\b/.test(
     msg
   );
-  const msgNumbers = extractNumberTokens(msg);
   const candidates = [];
 
   for (const l of listings) {
@@ -95,10 +94,6 @@ export function findListingIdFromMessage(message, listings) {
       .split(/\s+/)
       .filter((w) => w.length >= 3 || /^\d+$/.test(w));
     if (words.length === 0) continue;
-
-    const hasAnyNumberConstraint =
-      msgNumbers.length > 0 && !msgNumbers.some((n) => words.includes(n));
-    if (hasAnyNumberConstraint) continue;
 
     let hits = 0;
     for (const w of words) {
@@ -148,10 +143,4 @@ function normalizeForMatch(text) {
     .replace(/[^a-z0-9\s]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function extractNumberTokens(text) {
-  return String(text || "")
-    .split(/\s+/)
-    .filter((w) => /^\d+$/.test(w));
 }
