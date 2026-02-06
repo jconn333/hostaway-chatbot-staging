@@ -155,6 +155,17 @@ export function getSandboxHtml() {
       font-size:14px;
     }
 
+    .bubbleWrap{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      align-items:flex-start;
+    }
+
+    .bubbleWrap.user{
+      align-items:flex-end;
+    }
+
     .bubble.bot{
       background:var(--bubble-bot);
       align-self:flex-start;
@@ -164,6 +175,35 @@ export function getSandboxHtml() {
       background:var(--bubble-user);
       border-color:rgba(56,189,248,.36);
       align-self:flex-end;
+    }
+
+    .feedbackRow{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:var(--muted);
+      font-size:12px;
+      padding-left:6px;
+    }
+
+    .feedbackBtn{
+      border:1px solid rgba(148,163,184,.24);
+      background:rgba(148,163,184,.1);
+      color:var(--text);
+      border-radius:8px;
+      padding:4px 8px;
+      cursor:pointer;
+      font-size:12px;
+      line-height:1.1;
+    }
+
+    .feedbackBtn:hover{
+      border-color:rgba(125,211,252,.55);
+      background:rgba(56,189,248,.16);
+    }
+
+    .feedbackSaved{
+      color:#86efac;
     }
 
     .bubble a{
@@ -303,6 +343,7 @@ export function getSandboxHtml() {
               <span class="dot" id="sendDot"></span>
               <span id="sendStatus">Ready</span>
               <span class="badge" id="charCount">0 chars</span>
+              <span class="badge" id="codeVersionBadge">code: unknown</span>
             </div>
           </div>
         </div>
@@ -324,6 +365,10 @@ export function getSandboxHtml() {
     const sendDot = el("sendDot");
     const apiStatus = el("apiStatus");
     const charCount = el("charCount");
+    const codeVersionBadge = el("codeVersionBadge");
+    let currentCodeVersion = "unknown";
+    let turnNumber = 0;
+    const transcript = [];
 
     const savedName = localStorage.getItem("sandboxTesterName");
     if (savedName) testerName.value = savedName;
@@ -397,15 +442,96 @@ export function getSandboxHtml() {
       return out;
     }
 
-    function addBubble(text, who){
+    function addUserBubble(text){
+      const wrap = document.createElement("div");
+      wrap.className = "bubbleWrap user";
       const div = document.createElement("div");
-      div.className = "bubble " + (who === "user" ? "user" : "bot");
-      if (who === "bot") {
-        div.innerHTML = formatBotText(text);
-      } else {
-        div.textContent = text;
+      div.className = "bubble user";
+      div.textContent = text;
+      wrap.appendChild(div);
+      chat.appendChild(wrap);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function sendFeedback(payload, rowEl){
+      try {
+        const res = await fetch("/feedback", {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "feedback failed");
+        rowEl.innerHTML = '<span class="feedbackSaved">Saved feedback</span>';
+      } catch (err) {
+        rowEl.innerHTML = '<span>Feedback failed to save</span>';
       }
-      chat.appendChild(div);
+    }
+
+    function promptFeedbackMeta(){
+      const tagsRaw = window.prompt(
+        "Optional tags (comma-separated). Example: context_lost,wrong_route,bad_tone",
+        ""
+      );
+      const note = window.prompt("Optional note (why?)", "") || "";
+      const tags = String(tagsRaw || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      return { tags, note };
+    }
+
+    function addBotBubble(text, ctx){
+      const wrap = document.createElement("div");
+      wrap.className = "bubbleWrap";
+      const div = document.createElement("div");
+      div.className = "bubble bot";
+      div.innerHTML = formatBotText(text);
+      wrap.appendChild(div);
+
+      const row = document.createElement("div");
+      row.className = "feedbackRow";
+      row.innerHTML = '<span>Feedback:</span>';
+      const up = document.createElement("button");
+      up.className = "feedbackBtn";
+      up.type = "button";
+      up.textContent = "Thumbs up";
+      const down = document.createElement("button");
+      down.className = "feedbackBtn";
+      down.type = "button";
+      down.textContent = "Thumbs down";
+      row.appendChild(up);
+      row.appendChild(down);
+
+      const onVote = (vote) => {
+        const extra = promptFeedbackMeta();
+        const payload = {
+          feedback: vote,
+          codeVersion: currentCodeVersion,
+          testerName: testerName.value.trim() || null,
+          sessionId: ctx.sessionId,
+          listingId: Number.isFinite(ctx.listingId) ? String(ctx.listingId) : null,
+          turnNumber: ctx.turnNumber,
+          userMessage: ctx.userMessage || null,
+          botReply: text || null,
+          tags: extra.tags,
+          note: extra.note,
+          transcript: transcript.slice(-30),
+          meta: {
+            page: "sandbox",
+            sentAt: new Date().toISOString()
+          }
+        };
+        up.disabled = true;
+        down.disabled = true;
+        sendFeedback(payload, row);
+      };
+
+      up.addEventListener("click", () => onVote("up"));
+      down.addEventListener("click", () => onVote("down"));
+      wrap.appendChild(row);
+      chat.appendChild(wrap);
       chat.scrollTop = chat.scrollHeight;
     }
 
@@ -419,6 +545,9 @@ export function getSandboxHtml() {
       try{
         const res = await fetch("/healthz", { method: "GET" });
         if (res.ok){
+          const data = await res.json();
+          currentCodeVersion = data.codeVersion || currentCodeVersion;
+          codeVersionBadge.textContent = "code: " + currentCodeVersion;
           apiStatus.textContent = "online";
         } else {
           apiStatus.textContent = "issues";
@@ -444,7 +573,7 @@ export function getSandboxHtml() {
       const lidRaw = (listingId.value || "").trim();
       const lid = lidRaw ? Number(lidRaw) : null;
 
-      addBubble(msg, "user");
+      addUserBubble(msg);
       question.value = "";
       charCount.textContent = "0 chars";
       setSending(true);
@@ -467,10 +596,34 @@ export function getSandboxHtml() {
           body: JSON.stringify(payload)
         });
 
+        const versionHeader = res.headers.get("x-code-version");
+        if (versionHeader) {
+          currentCodeVersion = versionHeader;
+          codeVersionBadge.textContent = "code: " + currentCodeVersion;
+        }
         const data = await res.json();
-        addBubble(data.reply || "(no reply)", "bot");
+        turnNumber += 1;
+        const botText = data.reply || "(no reply)";
+        transcript.push({
+          turnNumber,
+          sessionId: sid,
+          userMessage: msg,
+          botReply: botText,
+          ts: new Date().toISOString()
+        });
+        addBotBubble(botText, {
+          turnNumber,
+          sessionId: sid,
+          userMessage: msg,
+          listingId: Number.isFinite(lid) ? lid : null
+        });
       } catch (e) {
-        addBubble("Server error. Please retry.", "bot");
+        addBotBubble("Server error. Please retry.", {
+          turnNumber: turnNumber + 1,
+          sessionId: (sessionId.value || "").trim(),
+          userMessage: msg,
+          listingId: Number.isFinite(lid) ? lid : null
+        });
       } finally {
         setSending(false);
       }
@@ -479,6 +632,8 @@ export function getSandboxHtml() {
     sendBtn.addEventListener("click", ask);
     clearBtn.addEventListener("click", () => {
       chat.innerHTML = "";
+      transcript.length = 0;
+      turnNumber = 0;
       question.focus();
     });
 

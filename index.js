@@ -3,7 +3,8 @@ import express from "express";
 import dotenv from "dotenv";
 import OpenAI from "openai";
 import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { getSandboxHtml } from "./src/ui.js";
 import {
   isAvailabilityQuestion,
@@ -62,6 +63,25 @@ const ENABLE_TEST_MODE =
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, constraints, updatedAt }
+const DATABASE_URL = process.env.DATABASE_URL || "";
+let feedbackTableReady = false;
+
+function cloneJson(value) {
+  if (value == null) return value;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return value;
+  }
+}
+
+function constraintsSignature(value) {
+  try {
+    return JSON.stringify(value || {});
+  } catch {
+    return "";
+  }
+}
 
 function readPackageVersion() {
   try {
@@ -84,6 +104,50 @@ function detectCommitShaShort() {
       .slice(0, 7);
   } catch {}
   return "local";
+}
+
+function sqlLit(value) {
+  if (value === null || value === undefined) return "NULL";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function runPsql(sql) {
+  if (!DATABASE_URL) throw new Error("DATABASE_URL is required for feedback storage");
+  const out = spawnSync("psql", [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-c", sql], {
+    encoding: "utf8",
+  });
+  if (out.status !== 0) {
+    const err = String(out.stderr || out.stdout || "psql failed").trim();
+    throw new Error(err);
+  }
+}
+
+function ensureFeedbackTable() {
+  if (feedbackTableReady) return;
+  const ddl = `
+CREATE SCHEMA IF NOT EXISTS chatbot_feedback;
+CREATE TABLE IF NOT EXISTS chatbot_feedback.turn_feedback (
+  feedback_id UUID PRIMARY KEY,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  code_version TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  turn_number INTEGER NOT NULL,
+  tester_name TEXT,
+  listing_id TEXT,
+  feedback TEXT NOT NULL CHECK (feedback IN ('up', 'down')),
+  tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  note TEXT,
+  user_message TEXT,
+  bot_reply TEXT,
+  transcript JSONB,
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb
+);
+CREATE INDEX IF NOT EXISTS idx_chatbot_feedback_created_at ON chatbot_feedback.turn_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chatbot_feedback_code_version ON chatbot_feedback.turn_feedback(code_version);
+CREATE INDEX IF NOT EXISTS idx_chatbot_feedback_session_id ON chatbot_feedback.turn_feedback(session_id);
+`;
+  runPsql(ddl);
+  feedbackTableReady = true;
 }
 
 function resolveCodeVersion() {
@@ -165,7 +229,7 @@ function looksLikeFollowupQuestion(message) {
   ) {
     return true;
   }
-  return /\b(what about that|what about those|that one|those ones|them|those|any others|which ones)\b/.test(
+  return /\b(what about that|what about those|that one|those ones|they|them|those|any others|which ones)\b/.test(
     msg
   );
 }
@@ -500,6 +564,46 @@ function buildConstraintFilterMeta(constraints) {
     capacity: constraints.capacity || null,
     dates: constraints.dates || null,
   };
+}
+
+function appendConstraintHistory(history, constraints, reason = "update") {
+  const list = Array.isArray(history) ? history.slice(-19) : [];
+  list.push({
+    at: new Date().toISOString(),
+    reason,
+    constraints: cloneJson(constraints) || null,
+  });
+  return list;
+}
+
+function pickRecalledConstraints(message, { baseline, current, history } = {}) {
+  const msg = String(message || "").toLowerCase();
+  const snapshots = Array.isArray(history) ? history : [];
+  const latestSnapshot = snapshots.length ? snapshots[snapshots.length - 1].constraints : null;
+  const previousSnapshot = snapshots.length > 1 ? snapshots[snapshots.length - 2].constraints : null;
+  const firstSnapshot = snapshots.length ? snapshots[0].constraints : null;
+
+  const asksOriginal =
+    /\boriginal (requirements|asks|constraints|preferences)\b/.test(msg) ||
+    /\bfirst (requirements|asks|constraints|preferences)\b/.test(msg);
+  const asksBeforeChange =
+    /\bbefore (i )?(changed|added|updated)\b/.test(msg) ||
+    /\bbefore (that|the) change\b/.test(msg);
+
+  if (asksBeforeChange) return previousSnapshot || baseline || latestSnapshot || current || null;
+  if (asksOriginal) return firstSnapshot || baseline || previousSnapshot || latestSnapshot || current || null;
+  return current || latestSnapshot || baseline || null;
+}
+
+function isBookingStepsRequest(message) {
+  const msg = String(message || "").toLowerCase();
+  return (
+    /\bnext steps?\b/.test(msg) ||
+    /\bhow (do i|to) book\b/.test(msg) ||
+    /\bbook quickly\b/.test(msg) ||
+    /\bhow can i reserve\b/.test(msg) ||
+    /\bwhat should i do to book\b/.test(msg)
+  );
 }
 
 function detectRecommendationIntent(message) {
@@ -1382,6 +1486,111 @@ app.get("/analytics/summary", (req, res) => {
   });
 });
 
+app.post("/feedback", (req, res) => {
+  try {
+    const feedback = String(req.body?.feedback || "").toLowerCase();
+    const sessionId = String(req.body?.sessionId || "").trim();
+    const turnNumber = Number(req.body?.turnNumber);
+    const codeVersion = String(req.body?.codeVersion || "").trim() || CODE_VERSION;
+
+    if (!["up", "down"].includes(feedback)) {
+      return res.status(400).json({ ok: false, error: "feedback must be 'up' or 'down'" });
+    }
+    if (!sessionId) return res.status(400).json({ ok: false, error: "sessionId is required" });
+    if (!Number.isInteger(turnNumber) || turnNumber <= 0) {
+      return res.status(400).json({ ok: false, error: "turnNumber must be a positive integer" });
+    }
+    if (!codeVersion) {
+      return res.status(400).json({ ok: false, error: "codeVersion is required" });
+    }
+    if (!DATABASE_URL) {
+      return res.status(503).json({ ok: false, error: "DATABASE_URL is not configured" });
+    }
+
+    const testerName = String(req.body?.testerName || "").trim() || null;
+    const listingId = req.body?.listingId != null ? String(req.body.listingId).trim() || null : null;
+    const tagsRaw = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const tags = tagsRaw
+      .map((x) => String(x || "").trim())
+      .filter(Boolean)
+      .slice(0, 12);
+    const note = String(req.body?.note || "").trim().slice(0, 2000) || null;
+    const userMessage = String(req.body?.userMessage || "").slice(0, 4000) || null;
+    const botReply = String(req.body?.botReply || "").slice(0, 12000) || null;
+    const transcript = Array.isArray(req.body?.transcript) ? req.body.transcript.slice(-40) : null;
+    const meta = req.body?.meta && typeof req.body.meta === "object" ? req.body.meta : {};
+    const feedbackId = randomUUID();
+
+    ensureFeedbackTable();
+    runPsql(
+      `INSERT INTO chatbot_feedback.turn_feedback
+       (feedback_id, code_version, session_id, turn_number, tester_name, listing_id, feedback, tags, note, user_message, bot_reply, transcript, meta)
+       VALUES (
+         ${sqlLit(feedbackId)}::uuid,
+         ${sqlLit(codeVersion)},
+         ${sqlLit(sessionId)},
+         ${turnNumber},
+         ${sqlLit(testerName)},
+         ${sqlLit(listingId)},
+         ${sqlLit(feedback)},
+         ${sqlLit(JSON.stringify(tags))}::jsonb,
+         ${sqlLit(note)},
+         ${sqlLit(userMessage)},
+         ${sqlLit(botReply)},
+         ${sqlLit(transcript ? JSON.stringify(transcript) : null)}::jsonb,
+         ${sqlLit(JSON.stringify(meta))}::jsonb
+       );`
+    );
+    logEvent("manual_feedback", {
+      sessionId,
+      turnNumber,
+      feedback,
+      codeVersion,
+      listingId,
+      tags,
+    });
+    return res.json({ ok: true, feedbackId, codeVersion });
+  } catch (err) {
+    console.error("Feedback write error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to save feedback" });
+  }
+});
+
+app.get("/feedback/recent", (req, res) => {
+  try {
+    if (!DATABASE_URL) {
+      return res.status(503).json({ ok: false, error: "DATABASE_URL is not configured" });
+    }
+    ensureFeedbackTable();
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
+    const codeVersion = String(req.query.codeVersion || "").trim();
+    const sessionId = String(req.query.sessionId || "").trim();
+    const where = [];
+    if (codeVersion) where.push(`code_version = ${sqlLit(codeVersion)}`);
+    if (sessionId) where.push(`session_id = ${sqlLit(sessionId)}`);
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const sql =
+      `SELECT feedback_id, created_at, code_version, session_id, turn_number, tester_name, listing_id, feedback, tags, note, user_message, bot_reply
+       FROM chatbot_feedback.turn_feedback
+       ${whereSql}
+       ORDER BY created_at DESC
+       LIMIT ${limit};`;
+    const out = spawnSync(
+      "psql",
+      [DATABASE_URL, "-v", "ON_ERROR_STOP=1", "-X", "-q", "-A", "-F", "\t", "-c", sql],
+      { encoding: "utf8" }
+    );
+    if (out.status !== 0) {
+      const err = String(out.stderr || out.stdout || "psql failed").trim();
+      throw new Error(err);
+    }
+    return res.type("text/plain").send(out.stdout || "");
+  } catch (err) {
+    console.error("Feedback read error:", err);
+    return res.status(500).json({ ok: false, error: "Failed to read feedback" });
+  }
+});
+
 app.get("/sandbox", (req, res) => {
   res.redirect(302, "/");
 });
@@ -1414,6 +1623,9 @@ app.post("/chat", async (req, res) => {
     const session = sessionId ? getSession(sessionId) : null;
     let constraintsBaseline = session?.constraints?.baseline || null;
     let constraintsCurrent = session?.constraints?.current || null;
+    let constraintsHistory = Array.isArray(session?.constraintsHistory)
+      ? session.constraintsHistory
+      : [];
     let memoryNote = "";
     const debugEnabled =
       req.query?.debug === "1" || String(req.headers["x-debug"] || "") === "1";
@@ -1444,6 +1656,10 @@ app.post("/chat", async (req, res) => {
         : looksLikeFollowupQuestion(userMessage)
           ? scopedInventoryFromSession
           : null;
+    const refersToPriorResultSet =
+      /\b(they|them|those|any of those|any of them|those ones)\b/i.test(userMessage || "") &&
+      Array.isArray(session?.activeResultSet?.listingIds) &&
+      session.activeResultSet.listingIds.length > 0;
     const directBookingRequest = isDirectBookingRequest(normalizedMessage);
     const llmFirstEnabled = String(process.env.LLM_FIRST_MODE || "1") === "1";
     const plan = llmFirstEnabled
@@ -1474,17 +1690,26 @@ app.post("/chat", async (req, res) => {
     const modelIntent = executionPlan.proposedIntent || "general";
     const modelConfidence = Number(executionPlan.confidence ?? 0);
     const effectiveIntent = executionPlan.validatedIntent || "general";
-    const constraintSignals = parseConstraintSignals(normalizedMessage);
+    const isRecallTurn = detectSessionRecallRequest(normalizedMessage);
+    const isRepairTurn = detectRepairRequest(normalizedMessage);
+    const constraintSignals =
+      !isRecallTurn && !isRepairTurn ? parseConstraintSignals(normalizedMessage) : null;
     if (constraintSignals) {
+      const beforeSig = constraintsSignature(constraintsCurrent);
       constraintsCurrent = mergeConstraints(constraintsCurrent, constraintSignals);
       if (!constraintsBaseline || constraintSignals.explicitRemember) {
         constraintsBaseline = mergeConstraints(constraintsBaseline, constraintSignals);
+      }
+      const afterSig = constraintsSignature(constraintsCurrent);
+      if (afterSig !== beforeSig) {
+        constraintsHistory = appendConstraintHistory(constraintsHistory, constraintsCurrent, "constraint_update");
       }
       setSession(sessionId, {
         constraints: {
           baseline: constraintsBaseline,
           current: constraintsCurrent,
         },
+        constraintsHistory,
       });
     }
     const testModeRequested =
@@ -1492,11 +1717,13 @@ app.post("/chat", async (req, res) => {
     let responseRoute = effectiveIntent || "general";
     let responseDates = null;
     let responseInventoryFilters = null;
+    let responseResultIds = null;
     let responseReplyType = null;
-    const setResponseContext = ({ route, dates, inventoryFilters, replyType } = {}) => {
+    const setResponseContext = ({ route, dates, inventoryFilters, resultIds, replyType } = {}) => {
       if (route) responseRoute = route;
       if (dates) responseDates = dates;
       if (inventoryFilters) responseInventoryFilters = inventoryFilters;
+      if (Array.isArray(resultIds)) responseResultIds = resultIds;
       if (replyType) responseReplyType = replyType;
     };
     const sendReply = (reply, ctx = {}) => {
@@ -1523,7 +1750,17 @@ app.post("/chat", async (req, res) => {
           updatedAt: Date.now(),
         };
       }
-      setSession(sessionId, { lastIntent: routedIntent, scopeMemory: nextScopeMemory });
+      const nextPatch = { lastIntent: routedIntent, scopeMemory: nextScopeMemory };
+      if (Array.isArray(responseResultIds)) {
+        nextPatch.activeResultSet = {
+          kind: String(routedIntent).includes("inventory") ? "inventory" : "unknown",
+          listingIds: responseResultIds,
+          filters: responseInventoryFilters || null,
+          dates: responseDates || null,
+          updatedAt: Date.now(),
+        };
+      }
+      setSession(sessionId, nextPatch);
       const voiced = applyReplyVoice(reply, {
         intent: effectiveIntent,
         policyIntent: policyIntentRaw,
@@ -1558,15 +1795,17 @@ app.post("/chat", async (req, res) => {
       });
     };
 
-    if (detectSessionRecallRequest(normalizedMessage)) {
+    if (isRecallTurn) {
       const recallMsg = String(normalizedMessage || "").toLowerCase();
       const wantsOriginal =
         /\boriginal requirements\b|\bbefore (that|the) change\b|\bbefore adding\b|\bbefore i added\b|\bbefore i changed\b|\bbefore i said\b/.test(
           recallMsg
         );
-      const chosenConstraints = wantsOriginal
-        ? constraintsBaseline || constraintsCurrent
-        : constraintsCurrent || constraintsBaseline;
+      const chosenConstraints = pickRecalledConstraints(recallMsg, {
+        baseline: constraintsBaseline,
+        current: constraintsCurrent,
+        history: constraintsHistory,
+      });
       if (chosenConstraints) {
         const bullets = formatConstraintsBullets(chosenConstraints);
         const label = wantsOriginal ? "original requirements" : "saved requirements";
@@ -1820,6 +2059,7 @@ app.post("/chat", async (req, res) => {
           route: "inventory_constraints",
           dates: dates || null,
           inventoryFilters,
+          resultIds: recs.map((r) => String(r.safe.id)),
           replyType: "inventory",
         }
       );
@@ -2066,6 +2306,12 @@ app.post("/chat", async (req, res) => {
             unitType: capacityUnitType,
             petFriendly: capacityWantsPetFriendly,
           },
+          resultIds: lines
+            .map((line) => {
+              const m = String(line || "").match(/listings\/(\d+)/i);
+              return m ? m[1] : null;
+            })
+            .filter(Boolean),
           replyType: "inventory",
         });
       }
@@ -2128,6 +2374,12 @@ app.post("/chat", async (req, res) => {
           unitType: petUnitType || null,
           petFriendly: true,
         },
+        resultIds: lines
+          .map((line) => {
+            const m = String(line || "").match(/listings\/(\d+)/i);
+            return m ? m[1] : null;
+          })
+          .filter(Boolean),
         replyType: "inventory",
       });
     }
@@ -2239,6 +2491,7 @@ app.post("/chat", async (req, res) => {
       (isInventoryAvailabilityQuestion(userMessage) ||
         effectiveIntent === "inventory_availability" ||
         (followupInventory?.type === "availability" && !hasAmenityFollowupSignal) ||
+        (isAvailabilityQuestion(normalizedMessage) && refersToPriorResultSet) ||
         inventoryFollowupAvailability)
     ) {
       let dates = extractDates(normalizedMessage);
@@ -2278,7 +2531,20 @@ app.post("/chat", async (req, res) => {
         ? listings.filter((l) =>
             String(l.name || "").toLowerCase().includes(unitType)
           )
-        : listings;
+        : (() => {
+            const activeIds = Array.isArray(session?.activeResultSet?.listingIds)
+              ? new Set(session.activeResultSet.listingIds.map((x) => String(x)))
+              : null;
+            const canUseActiveSet =
+              /\b(they|them|those|any of (them|those)|those ones)\b/i.test(userMessage || "") &&
+              activeIds &&
+              activeIds.size > 0;
+            if (canUseActiveSet) {
+              const scoped = listings.filter((l) => activeIds.has(String(l.id)));
+              if (scoped.length) return scoped;
+            }
+            return listings;
+          })();
 
       const results = await mapWithConcurrency(
         sourceListings,
@@ -2349,6 +2615,12 @@ app.post("/chat", async (req, res) => {
           route: "inventory_availability",
           dates,
           inventoryFilters: { unitType: unitType || null },
+          resultIds: shown
+            .map((line) => {
+              const m = String(line || "").match(/listings\/(\d+)/i);
+              return m ? m[1] : null;
+            })
+            .filter(Boolean),
           replyType: "availability",
         }
       );
@@ -2591,6 +2863,7 @@ app.post("/chat", async (req, res) => {
             unitType: unitType || null,
             petFriendly: wantsPetFriendly,
           },
+          resultIds: matches.map((s) => String(s.id)),
           replyType: "inventory",
         });
         }
@@ -2667,6 +2940,32 @@ app.post("/chat", async (req, res) => {
           }
         }
       }
+    }
+
+    if (!listingId && isBookingStepsRequest(normalizedMessage)) {
+      const activeIds = Array.isArray(session?.activeResultSet?.listingIds)
+        ? session.activeResultSet.listingIds.map((x) => String(x))
+        : [];
+      const topUnits = activeIds
+        .slice(0, 3)
+        .map((id) => listings.find((l) => String(l.id) === id))
+        .filter(Boolean);
+      let unitLine = "";
+      if (topUnits.length) {
+        const picks = topUnits
+          .map((u) => `• [${u.name}](https://book.amishcountrylodging.com/listings/${u.id})`)
+          .join("\n");
+        unitLine = `\n\nIf you want to move fast, pick one of these from your current shortlist:\n${picks}`;
+      }
+      return sendReply(
+        "Here are the fastest booking steps:\n\n" +
+          "1) Pick your unit.\n" +
+          "2) Select check-in and check-out dates.\n" +
+          "3) Confirm guest count and total.\n" +
+          "4) Complete checkout with guest details and payment." +
+          unitLine,
+        { route: "booking_steps", replyType: "summary" }
+      );
     }
 
     // If we still don't have a listing, ask + suggestions

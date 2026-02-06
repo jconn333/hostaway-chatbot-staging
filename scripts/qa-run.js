@@ -19,7 +19,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.QA_TIMEOUT_MS || 15000);
 const MAX_RETRIES = Number(process.env.QA_MAX_RETRIES || 2);
 const SESSIONS_TO_RUN = Number(process.env.QA_SESSIONS || 5);
 const TURNS_LIMIT = Number(process.env.QA_TURNS_LIMIT || 8);
-const QUESTION_SET_ID = process.env.QA_QUESTION_SET_ID || "qa_core_v2_guest_journey";
+const QUESTION_SET_ID = process.env.QA_QUESTION_SET_ID || "qa_core_v3_user_prompts";
 
 function sqlLit(v) {
   if (v === null || v === undefined) return "NULL";
@@ -291,7 +291,7 @@ function evaluateTurnHybrid({ botReply, turnCfg, sessionState }) {
   };
 }
 
-const coreSessions = [
+const coreSessionsV3 = [
   {
     persona: {
       group_type: "family",
@@ -300,19 +300,15 @@ const coreSessions = [
       tone: "polite, detail-oriented",
     },
     turns: [
-      { msg: "Hi, we are a family of 6 planning a trip. Which cabins or units fit us best?", mustMention: ["unit"], expectingDirectAnswer: true },
-      { msg: "Please compare layout and bedrooms for options suitable for 6 people.", mustMention: ["bedroom"], expectingDirectAnswer: true },
-      { msg: "Could you suggest two possible date ranges in May 2026 that might work for us?", expectingDirectAnswer: true },
+      { msg: "Which units have hot tubs?", mustMention: ["hot"], expectingDirectAnswer: true },
+      { msg: "Which of those units also have 2 bedrooms?", mustMention: ["2"], expectingDirectAnswer: true },
+      { msg: "Are any of them available this weekend?", consistencyKey: "family_this_weekend", expectingDirectAnswer: true },
+      { msg: "When is the next weekend they are available?", mustMention: ["weekend"], expectingDirectAnswer: true },
       { msg: "Please remember this exactly: 6 guests, 3 bedrooms minimum, fireplace, strong wifi, budget-sensitive, dates 2026-05-15 to 2026-05-18." },
       { msg: "Based on those exact requirements, what are the best options?", mustMention: ["6"], expectingDirectAnswer: true },
       { msg: "For those dates, do you have an option with both a fireplace and strong wifi?", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
-      { msg: "Actually maybe 4 guests and 2 bedrooms, same dates. What changes?", mustMention: ["date"], expectingDirectAnswer: true },
       // QA self-test: memory term "3 bedroom" should semantically match replies like "3+ bedrooms".
       { msg: "Before I changed anything, can you restate my original requirements?", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
-      { msg: "Now check availability again for my original requirements, not the reduced ones.", mustMention: ["2026-05-15"], expectingDirectAnswer: true },
-      { msg: "If your earlier yes/no answer conflicts with this result, reconcile the difference briefly.", mustMention: ["because"], expectingDirectAnswer: true },
-      { msg: "Please correct any earlier mistake in one sentence.", mustMention: ["sorry"], expectingDirectAnswer: true },
-      { msg: "Can you give me a final recommendation with the unit, suggested date range, and why it fits us?", expectingDirectAnswer: true },
     ],
   },
   {
@@ -323,18 +319,14 @@ const coreSessions = [
       tone: "chatty",
     },
     turns: [
-      { msg: "My partner and I want a romantic weekend getaway. Which units feel most private?", mustMention: ["unit"], expectingDirectAnswer: true },
-      { msg: "Which of those have a hot tub and fireplace?", mustMention: ["hot"], expectingDirectAnswer: true },
-      { msg: "Do you have at least one private hot-tub option for two guests next weekend?", consistencyKey: "couple_hot_tub", expectingDirectAnswer: true },
+      { msg: "Which units have a hot tub?", mustMention: ["hot"], expectingDirectAnswer: true },
+      { msg: "Which of those units also have 2 bedrooms?", mustMention: ["2"], expectingDirectAnswer: true },
+      { msg: "Are any of them available next weekend?", consistencyKey: "couple_next_weekend", expectingDirectAnswer: true },
+      { msg: "When is the next weekend they are available?", mustMention: ["weekend"], expectingDirectAnswer: true },
       { msg: "Remember this: 2 guests, next weekend, hot tub required, privacy first." },
-      { msg: "Give me exactly 3 bullet points with your top choices.", expectingDirectAnswer: true },
-      { msg: "If you had to pick one, what’s the best unit and what’s your reason?", expectingDirectAnswer: true },
+      { msg: "If you had to pick one for a romantic stay, what’s the best unit and why?", expectingDirectAnswer: true },
       { msg: "Actually, add pet-friendly as a new requirement too. Any conflicts?", mustMention: ["pet"], expectingDirectAnswer: true },
       { msg: "Before I added pet-friendly, what requirements had I already given you?", memoryMustInclude: ["2", "next weekend", "hot tub", "privacy"], expectingDirectAnswer: true },
-      { msg: "What are the soonest 2-night date options you’d suggest?", expectingDirectAnswer: true },
-      { msg: "You contradicted yourself if you said no then gave options. Repair that clearly in one sentence.", mustMention: ["because"], expectingDirectAnswer: true },
-      { msg: "Given everything I’ve asked for now, can you still meet all my requirements?", consistencyKey: "couple_all_reqs", expectingDirectAnswer: true },
-      { msg: "Please wrap up with your recommended unit, whether it meets all requirements, and any caveats I should know.", expectingDirectAnswer: true },
     ],
   },
   {
@@ -345,17 +337,13 @@ const coreSessions = [
       tone: "rushed, blunt",
     },
     turns: [
-      { msg: "I need a place tonight or tomorrow. Solo traveler. Cheapest options?", mustMention: ["available"], expectingDirectAnswer: true },
-      { msg: "Can you list a few options and include whether wifi quality is good for each?", expectingDirectAnswer: true },
-      { msg: "What are the next two realistic check-in/check-out ranges I should consider?", expectingDirectAnswer: true },
-      { msg: "Remember this: solo, strong wifi required, budget is tight, last-minute only." },
-      { msg: "Based on that, do you have anything that actually matches what I need?", consistencyKey: "solo_match", expectingDirectAnswer: true },
-      { msg: "Which unit is closest to local attractions and still budget friendly?", mustMention: ["unit"], expectingDirectAnswer: true },
-      { msg: "I changed my mind: now I can do next week too. What improves?", mustMention: ["week"], expectingDirectAnswer: true },
-      { msg: "Before I said I could do next week, what were my original constraints?", memoryMustInclude: ["solo", "wifi", "budget", "last-minute"], expectingDirectAnswer: true },
-      { msg: "Give me your top 2 options and tell me price level and why each one is a fit.", expectingDirectAnswer: true },
-      { msg: "If any earlier response no longer fits my needs, please correct it now in one concise line.", mustMention: ["fit"], expectingDirectAnswer: true },
-      { msg: "How confident are you these options are currently available?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
+      { msg: "What unit has four bedrooms and also has a hot tub?", mustMention: ["4"], expectingDirectAnswer: true },
+      { msg: "Is it available this weekend?", consistencyKey: "solo_this_weekend", expectingDirectAnswer: true },
+      { msg: "If not, what is the next weekend it is available?", mustMention: ["weekend"], expectingDirectAnswer: true },
+      { msg: "Please remember this: solo traveler, strong wifi required, budget is tight, and I prefer one unit recommendation." },
+      { msg: "Given that, what is your best single recommendation and why?", expectingDirectAnswer: true },
+      { msg: "Before I added budget and wifi constraints, what were my original asks in this chat?", memoryMustInclude: ["four bedroom", "hot tub", "this weekend"], expectingDirectAnswer: true },
+      { msg: "If any earlier answer conflicts with this recommendation, reconcile it clearly.", mustMention: ["because"], expectingDirectAnswer: true },
       { msg: "What are the exact next steps I should take to book quickly?", expectingDirectAnswer: true },
     ],
   },
@@ -382,6 +370,7 @@ const coreSessions = [
     ],
   },
 ];
+
 
 function cloneDeep(obj) {
   return JSON.parse(JSON.stringify(obj));
@@ -463,15 +452,16 @@ function mutateTurns(baseTurns, fuzzIndex, seed) {
 
 function buildRunSessions(requestedSessions, fuzzSeed) {
   const minSessions = Math.max(1, Number(requestedSessions) || 1);
+  const baseSessions = coreSessionsV3;
   const sessions = [];
 
-  for (let i = 0; i < Math.min(minSessions, coreSessions.length); i++) {
-    sessions.push(cloneDeep(coreSessions[i]));
+  for (let i = 0; i < Math.min(minSessions, baseSessions.length); i++) {
+    sessions.push(cloneDeep(baseSessions[i]));
   }
 
   let fuzzIdx = 0;
   while (sessions.length < minSessions) {
-    const base = coreSessions[fuzzIdx % coreSessions.length];
+    const base = baseSessions[fuzzIdx % baseSessions.length];
     sessions.push({
       persona: {
         ...mutatePersona(base.persona, fuzzIdx),
@@ -542,6 +532,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
   const requestedSessions = Math.max(1, SESSIONS_TO_RUN);
   const turnsPerSession = TURNS_LIMIT > 0 ? TURNS_LIMIT : 12;
   const runSessions = buildRunSessions(requestedSessions, fuzzSeed);
+  const sessionGenerationMode = requestedSessions <= coreSessionsV3.length ? "core_fixed" : "4_core_plus_fuzz";
   const versionMeta = resolveVersionMetadata();
   let serverVersionMeta = {};
   try {
@@ -567,7 +558,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
     evaluation_mode: "hybrid",
     loosened_format_auto_fails: ["dates_only", "yes_no_only", "json_only"],
     judgment_threshold: "balanced",
-    session_generation_mode: "4_core_plus_6_fuzz",
+    session_generation_mode: sessionGenerationMode,
     fuzz_seed: fuzzSeed,
     requested_sessions: requestedSessions,
     execution_started_at: new Date().toISOString(),
