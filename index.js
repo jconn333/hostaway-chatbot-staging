@@ -56,6 +56,8 @@ const INVENTORY_AVAILABILITY_CONCURRENCY = 5;
 const INVENTORY_AVAILABILITY_MAX = 20;
 const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-4o-mini";
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
+const BOT_MODE = String(process.env.BOT_MODE || "structured").toLowerCase();
+const UNRESTRICTED_LLM_MODE = BOT_MODE === "unrestricted_llm";
 const ENABLE_TEST_MODE =
   String(
     process.env.ENABLE_TEST_MODE ??
@@ -257,6 +259,12 @@ function normalizeUserMessage(message) {
     .replace(/\bpet[- ]?freindly\b/gi, "pet-friendly")
     .replace(/\bcheckin\b/gi, "check in")
     .replace(/\bcheckout\b/gi, "check out");
+}
+
+function trimConversationHistory(history, maxTurns = 12) {
+  const list = Array.isArray(history) ? history : [];
+  const maxMessages = Math.max(2, maxTurns * 2);
+  return list.slice(-maxMessages);
 }
 
 function monthQueryToRange(message, timeZone = "America/New_York") {
@@ -1422,6 +1430,8 @@ app.get("/version", (req, res) => {
     codeVersion: CODE_VERSION,
     intentModel: INTENT_MODEL,
     answerModel: ANSWER_MODEL,
+    botMode: BOT_MODE,
+    unrestrictedLlmMode: UNRESTRICTED_LLM_MODE,
     llmFirstMode: String(process.env.LLM_FIRST_MODE || "1") === "1",
     testModeEnabled: ENABLE_TEST_MODE,
     timestamp: new Date().toISOString(),
@@ -1502,6 +1512,76 @@ app.post("/chat", async (req, res) => {
       if (value == null) return;
       res.setHeader(`X-Debug-${key}`, String(value));
     };
+    const testModeRequested =
+      ENABLE_TEST_MODE && String(req.headers["x-test-mode"] || "").trim() === "1";
+
+    if (UNRESTRICTED_LLM_MODE) {
+      setDebugHeader("Mode", "unrestricted_llm");
+      const prior = trimConversationHistory(session?.rawChatHistory, 12);
+      const systemPrompt =
+        process.env.UNRESTRICTED_SYSTEM_PROMPT ||
+        "You are a helpful, conversational assistant for Amish Country Lodging. Answer naturally and directly. If you are not sure, say so clearly.";
+      let reply =
+        "Sorry — I’m having trouble answering that right now. Could you try again?";
+      try {
+        const resp = await client.responses.create({
+          model: ANSWER_MODEL,
+          input: [
+            { role: "system", content: systemPrompt },
+            ...prior,
+            { role: "user", content: userMessage },
+          ],
+        });
+        const out = String(resp.output_text || "").trim();
+        if (out) reply = out;
+      } catch (err) {
+        console.error("Unrestricted OpenAI error:", err);
+      }
+
+      const nextHistory = trimConversationHistory(
+        [...prior, { role: "user", content: userMessage }, { role: "assistant", content: reply }],
+        12
+      );
+      setSession(sessionId, {
+        rawChatHistory: nextHistory,
+        lastMessage: userMessage,
+        lastIntent: "general",
+      });
+      logEvent("chat_request", {
+        sessionId: sessionId || "anonymous",
+        listingId: listingId || null,
+        intent: "general",
+        modelIntent: "unrestricted_llm",
+        modelConfidence: 1,
+        codeVersion: CODE_VERSION,
+      });
+      if (!testModeRequested) {
+        return res.json({ reply });
+      }
+      return res.json({
+        reply,
+        meta: {
+          codeVersion: CODE_VERSION,
+          intent: "general",
+          route: "unrestricted_llm",
+          listingId: listingId ? String(listingId) : null,
+          sessionListingId: session?.listingId ? String(session.listingId) : null,
+          dates: null,
+          inventoryFilters: null,
+          usedSessionMemory: Boolean(prior.length),
+          replyType: "general",
+          plan: {
+            proposedIntent: "general",
+            validatedIntent: "general",
+            intentSource: "unrestricted_llm",
+            scope: "conversation",
+            useSessionUnit: false,
+            confidence: 1,
+          },
+        },
+      });
+    }
+
     const followupAmenityKey =
       looksLikeFollowupQuestion(userMessage) && session?.lastAmenityKey
         ? session.lastAmenityKey
@@ -1553,8 +1633,6 @@ app.post("/chat", async (req, res) => {
         },
       });
     }
-    const testModeRequested =
-      ENABLE_TEST_MODE && String(req.headers["x-test-mode"] || "").trim() === "1";
     let responseRoute = effectiveIntent || "general";
     let responseDates = null;
     let responseInventoryFilters = null;
