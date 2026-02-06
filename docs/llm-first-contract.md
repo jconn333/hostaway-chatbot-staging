@@ -51,12 +51,34 @@ When model output conflicts with deterministic truth:
 
 ## Request Handling Contract
 For each message:
-1. Normalize input text (typo normalization where configured).
-2. Model produces intent/planning signal.
-3. Deterministic router validates/plumbs route with session context.
-4. Required tools execute for truth domains.
-5. Response is generated and then normalized by output invariants.
-6. Route-level metadata is stored for next-turn continuity.
+1. Normalize input text.
+2. Build model context from session state (listing, dates, filters, role).
+3. Call model with system prompt + strict tool catalog.
+4. If model requests tools:
+   1. Validate tool args against schema.
+   2. Enforce policy gates (allowlist, confirmation, read-only).
+   3. Execute tool with retry/timeout and append structured result.
+   4. Continue loop until no tool call remains.
+5. If required fields are missing/ambiguous, ask one concise clarification question.
+6. Return final response and persist route/session continuity fields.
+
+## Tool Contract
+Each tool must define:
+1. Name + description.
+2. Strict JSON schema:
+   1. required fields
+   2. enums
+   3. date/string/number bounds
+   4. `additionalProperties: false`
+3. Role allowlist.
+4. Irreversible action flag (confirmation gate).
+
+Current production tool set is read-only:
+1. `resolve_listing`
+2. `get_listing_summary`
+3. `check_listing_availability`
+4. `list_units`
+5. `get_policy`
 
 ## Test Mode Contract
 When `X-Test-Mode: 1` and `ENABLE_TEST_MODE=true`:

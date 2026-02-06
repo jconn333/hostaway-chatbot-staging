@@ -20,7 +20,8 @@
     "golden:bug:add": "node scripts/golden-bug-add.js",
     "golden:oracle": "node scripts/golden-oracle.js",
     "monitor:synthetic": "node scripts/synthetic-monitor.js",
-    "qa:run": "node scripts/qa-run.js"
+    "qa:run": "node scripts/qa-run.js",
+    "eval:real": "node scripts/eval-real-conversations.js"
   },
   "keywords": [],
   "author": "",

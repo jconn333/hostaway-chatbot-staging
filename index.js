@@ -37,6 +37,7 @@ import {
   detectAmenityKeyLoose,
   hasAmenity,
 } from "./src/lib/inventory.js";
+import { createModelFirstOrchestrator } from "./src/orchestrator/orchestrator.js";
 
 dotenv.config();
 
@@ -182,6 +183,38 @@ function logEvent(type, data = {}) {
   if (eventLog.length > EVENT_LOG_MAX) eventLog.shift();
   console.log(JSON.stringify(evt));
 }
+
+const MODEL_FIRST_ORCHESTRATOR =
+  String(process.env.MODEL_FIRST_ORCHESTRATOR ?? "true").toLowerCase() === "true";
+const MAX_TOOL_CALLS_PER_TURN = Number(process.env.MAX_TOOL_CALLS_PER_TURN || 6);
+const MAX_TOOL_FAILURES_PER_TURN = Number(process.env.MAX_TOOL_FAILURES_PER_TURN || 3);
+const TOOL_TIMEOUT_MS = Number(process.env.TOOL_TIMEOUT_MS || 15000);
+
+const modelFirstOrchestrator = createModelFirstOrchestrator({
+  client,
+  model: ANSWER_MODEL,
+  maxToolCalls: Number.isFinite(MAX_TOOL_CALLS_PER_TURN) ? MAX_TOOL_CALLS_PER_TURN : 6,
+  maxExecutionFailures: Number.isFinite(MAX_TOOL_FAILURES_PER_TURN)
+    ? MAX_TOOL_FAILURES_PER_TURN
+    : 3,
+  toolTimeoutMs: Number.isFinite(TOOL_TIMEOUT_MS) ? TOOL_TIMEOUT_MS : 15000,
+  logger: (type, data) => logEvent(type, data),
+  deps: {
+    getHostawayAccessToken,
+    getListingsCached,
+    fetchListingByIdCached,
+    fetchCalendarRange,
+    toSafeListingFacts,
+    findListingIdFromMessage,
+    findListingIdFromMessageStrong,
+    suggestUnits,
+    helpers: {
+      findListingIdFromMessage,
+      findListingIdFromMessageStrong,
+      suggestUnits,
+    },
+  },
+});
 
 function getSession(sessionId) {
   if (!sessionId) return null;
@@ -1698,6 +1731,81 @@ app.post("/chat", async (req, res) => {
       if (value == null) return;
       res.setHeader(`X-Debug-${key}`, String(value));
     };
+
+    if (MODEL_FIRST_ORCHESTRATOR) {
+      const testModeRequested =
+        ENABLE_TEST_MODE && String(req.headers["x-test-mode"] || "").trim() === "1";
+      const role = String(req.headers["x-user-role"] || "guest").toLowerCase();
+
+      logEvent("chat_request", {
+        sessionId: sessionId || "anonymous",
+        listingId: listingId || session?.listingId || null,
+        role,
+        mode: "model_first_orchestrator",
+        codeVersion: CODE_VERSION,
+      });
+
+      const orchestration = await modelFirstOrchestrator.runTurn({
+        message: normalizedMessage,
+        sessionId,
+        session,
+        role,
+        listingIdHint: listingId || session?.listingId || null,
+        runtime: {},
+      });
+
+      if (sessionId) {
+        setSession(sessionId, {
+          ...(orchestration.sessionPatch || {}),
+          lastIntent: orchestration.route || "general",
+        });
+      }
+
+      const reply = applyReplyVoice(orchestration.reply || "", {
+        intent: orchestration.route || "general",
+        policyIntent: null,
+        userMessage: normalizedMessage,
+      });
+
+      setDebugHeader("Mode", "model_first_orchestrator");
+      setDebugHeader("Route", orchestration.route || "general");
+      setDebugHeader("CodeVersion", CODE_VERSION);
+
+      if (testModeRequested) {
+        return res.json({
+          reply,
+          meta: {
+            codeVersion: CODE_VERSION,
+            intent: orchestration.route || "general",
+            route: orchestration.route || "general",
+            listingId:
+              orchestration.sessionPatch?.listingId ||
+              listingId ||
+              session?.listingId ||
+              null,
+            sessionListingId: session?.listingId || null,
+            dates: orchestration.sessionPatch?.dates || session?.dates || null,
+            inventoryFilters:
+              orchestration.sessionPatch?.inventoryFilters || session?.inventoryFilters || null,
+            usedSessionMemory: Boolean(session?.listingId || session?.dates || session?.inventoryFilters),
+            replyType:
+              orchestration.replyType ||
+              inferReplyType(orchestration.route || "general", reply),
+            orchestration: {
+              toolCallCount: orchestration.trace?.toolCallCount || 0,
+              unknownToolCalls: orchestration.trace?.unknownToolCalls || 0,
+              validation: orchestration.trace?.validation || [],
+              toolExecutions: orchestration.trace?.toolExecutions || [],
+              failureReason: orchestration.trace?.failureReason || null,
+              clarificationAsked: Boolean(orchestration.trace?.clarificationAsked),
+            },
+          },
+        });
+      }
+
+      return res.json({ reply });
+    }
+
     const followupAmenityKey =
       looksLikeFollowupQuestion(userMessage) && session?.lastAmenityKey
         ? session.lastAmenityKey
