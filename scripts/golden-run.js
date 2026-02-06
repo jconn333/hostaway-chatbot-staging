@@ -132,8 +132,13 @@ function scopedSessionId(baseSessionId) {
 }
 
 function expectIncludes(reply, values = []) {
+  const toDisplayDate = (v) =>
+    String(v).replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (_m, y, mm, dd) => {
+      return `${mm}-${dd}-${String(y).slice(-2)}`;
+    });
   for (const v of values) {
-    if (!reply.includes(v)) {
+    const alt = toDisplayDate(v);
+    if (!reply.includes(v) && !reply.includes(alt)) {
       return `Expected reply to include: ${v}`;
     }
   }
@@ -161,8 +166,13 @@ function expectRegex(reply, values = []) {
 
 function expectOneOfIncludes(reply, values = []) {
   if (!values.length) return null;
+  const toDisplayDate = (v) =>
+    String(v).replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g, (_m, y, mm, dd) => {
+      return `${mm}-${dd}-${String(y).slice(-2)}`;
+    });
   for (const v of values) {
-    if (reply.includes(v)) return null;
+    const alt = toDisplayDate(v);
+    if (reply.includes(v) || reply.includes(alt)) return null;
   }
   return `Expected reply to include one of: ${values.join(" | ")}`;
 }

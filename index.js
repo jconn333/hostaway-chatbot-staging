@@ -257,6 +257,23 @@ function normalizeUserMessage(message) {
     .replace(/\bcheckout\b/gi, "check out");
 }
 
+function isoToShortDate(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return String(iso || "");
+  return `${m[2]}-${m[3]}-${m[1].slice(-2)}`;
+}
+
+function formatReplyDatesForDisplay(text) {
+  const raw = String(text || "");
+  return raw.replace(/\b(\d{4}-\d{2}-\d{2})\b/g, (match, iso, offset, full) => {
+    const prev = full[offset - 1] || "";
+    const next = full[offset + match.length] || "";
+    // Keep URL query/path timestamps intact.
+    if (prev === "=" || prev === "/" || prev === "-" || next === "T") return match;
+    return isoToShortDate(iso);
+  });
+}
+
 function monthQueryToRange(message, timeZone = "America/New_York") {
   const msg = String(message || "").toLowerCase();
   const months = {
@@ -1431,12 +1448,13 @@ app.post("/chat", async (req, res) => {
         policyIntent: policyIntentRaw,
         userMessage,
       });
-      if (/Book now:/i.test(voiced)) metrics.booking_link_replies += 1;
+      const displayReply = formatReplyDatesForDisplay(voiced);
+      if (/Book now:/i.test(displayReply)) metrics.booking_link_replies += 1;
       if (!testModeRequested) {
-        return res.json({ reply: voiced });
+        return res.json({ reply: displayReply });
       }
       return res.json({
-        reply: voiced,
+        reply: displayReply,
         meta: {
           codeVersion: CODE_VERSION,
           intent: effectiveIntent || "general",
@@ -1446,7 +1464,7 @@ app.post("/chat", async (req, res) => {
           dates: responseDates,
           inventoryFilters: responseInventoryFilters,
           usedSessionMemory: Boolean(memoryNote),
-          replyType: responseReplyType || inferReplyType(responseRoute, voiced),
+          replyType: responseReplyType || inferReplyType(responseRoute, displayReply),
           plan: {
             proposedIntent: modelIntent,
             validatedIntent: effectiveIntent || "general",

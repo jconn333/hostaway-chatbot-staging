@@ -19,6 +19,7 @@ const REQUEST_TIMEOUT_MS = Number(process.env.QA_TIMEOUT_MS || 15000);
 const MAX_RETRIES = Number(process.env.QA_MAX_RETRIES || 2);
 const SESSIONS_TO_RUN = Number(process.env.QA_SESSIONS || 5);
 const TURNS_LIMIT = Number(process.env.QA_TURNS_LIMIT || 8);
+const QUESTION_SET_ID = process.env.QA_QUESTION_SET_ID || "qa_core_v2_guest_journey";
 
 function sqlLit(v) {
   if (v === null || v === undefined) return "NULL";
@@ -89,14 +90,100 @@ function includesAll(text, arr) {
   return arr.every((x) => low.includes(String(x).toLowerCase()));
 }
 
+function singularizeToken(tok) {
+  const t = String(tok || "").toLowerCase();
+  if (t.length <= 3) return t;
+  if (t.endsWith("ies") && t.length > 4) return `${t.slice(0, -3)}y`;
+  if (t.endsWith("s")) return t.slice(0, -1);
+  return t;
+}
+
+function normalizeText(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractNumbers(normalized) {
+  return normalized.match(/\b\d+\b/g) || [];
+}
+
+function containsSemanticTerm(reply, expectedTerm) {
+  const normReply = normalizeText(reply);
+  const normExpected = normalizeText(expectedTerm);
+  if (!normExpected) return true;
+  if (normReply.includes(normExpected)) return true;
+
+  const canonReply = normReply
+    .split(" ")
+    .filter(Boolean)
+    .map(singularizeToken)
+    .join(" ");
+  const canonExpected = normExpected
+    .split(" ")
+    .filter(Boolean)
+    .map(singularizeToken)
+    .join(" ");
+  if (canonExpected && canonReply.includes(canonExpected)) return true;
+
+  const numNoun = /(^|\s)(\d+)\s+([a-z]+)/.exec(normExpected);
+  if (numNoun) {
+    const n = numNoun[2];
+    const noun = singularizeToken(numNoun[3]);
+    const nounPattern = noun.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rx = new RegExp(`\\b${n}\\s+${nounPattern}s?\\b`);
+    if (rx.test(normReply) || rx.test(canonReply)) return true;
+  }
+
+  const expectedNums = extractNumbers(normExpected);
+  if (expectedNums.length >= 2) {
+    const replyNums = new Set(extractNumbers(normReply));
+    if (expectedNums.every((n) => replyNums.has(n))) return true;
+  }
+
+  const replyTokSet = new Set(canonReply.split(" ").filter(Boolean));
+  const expectedToks = canonExpected.split(" ").filter(Boolean);
+  if (expectedToks.length && expectedToks.every((t) => replyTokSet.has(t))) return true;
+  return false;
+}
+
+function checkMemoryTerms(reply, expectedTerms) {
+  const matched = [];
+  const missing = [];
+  for (const term of expectedTerms || []) {
+    if (containsSemanticTerm(reply, term)) matched.push(term);
+    else missing.push(term);
+  }
+  return {
+    allMatched: missing.length === 0,
+    missing,
+    matched,
+  };
+}
+
 function evaluateTurnHybrid({ botReply, turnCfg, sessionState }) {
   const issues = [];
   const hardIssues = [];
   const text = String(botReply || "");
   const lowReply = text.toLowerCase();
+  let missingExpectedTerms = [];
+  let matchedExpectedTerms = [];
 
-  if (turnCfg.memoryMustInclude && !includesAll(botReply, turnCfg.memoryMustInclude)) {
-    hardIssues.push("Memory failure: missing previously stated preferences.");
+  if (Array.isArray(turnCfg.memoryMustInclude) && turnCfg.memoryMustInclude.length) {
+    const memoryCheck = checkMemoryTerms(botReply, turnCfg.memoryMustInclude);
+    missingExpectedTerms = memoryCheck.missing;
+    matchedExpectedTerms = memoryCheck.matched;
+    if (!memoryCheck.allMatched) {
+      hardIssues.push("Memory failure: missing previously stated preferences.");
+    }
+  }
+  if (Array.isArray(turnCfg.forbidIncludes) && turnCfg.forbidIncludes.length) {
+    const hit = turnCfg.forbidIncludes.find((x) =>
+      lowReply.includes(String(x).toLowerCase())
+    );
+    if (hit) hardIssues.push(`Forbidden phrase appeared in reply: ${hit}`);
   }
 
   if (turnCfg.consistencyKey) {
@@ -199,6 +286,8 @@ function evaluateTurnHybrid({ botReply, turnCfg, sessionState }) {
     judgmentThreshold: "balanced",
     failureReasonType,
     qualityAvg: Number(qualityAvg.toFixed(2)),
+    missingExpectedTerms,
+    matchedExpectedTerms,
   };
 }
 
@@ -218,6 +307,7 @@ const coreSessions = [
       { msg: "Based on those exact requirements, what are the best options?", mustMention: ["6"], expectingDirectAnswer: true },
       { msg: "For those dates, do you have an option with both a fireplace and strong wifi?", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
       { msg: "Actually maybe 4 guests and 2 bedrooms, same dates. What changes?", mustMention: ["date"], expectingDirectAnswer: true },
+      // QA self-test: memory term "3 bedroom" should semantically match replies like "3+ bedrooms".
       { msg: "Before I changed anything, can you restate my original requirements?", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
       { msg: "Now check availability again for my original requirements, not the reduced ones.", mustMention: ["2026-05-15"], expectingDirectAnswer: true },
       { msg: "If your earlier yes/no answer conflicts with this result, reconcile the difference briefly.", mustMention: ["because"], expectingDirectAnswer: true },
@@ -264,8 +354,8 @@ const coreSessions = [
       { msg: "I changed my mind: now I can do next week too. What improves?", mustMention: ["week"], expectingDirectAnswer: true },
       { msg: "Before I said I could do next week, what were my original constraints?", memoryMustInclude: ["solo", "wifi", "budget", "last-minute"], expectingDirectAnswer: true },
       { msg: "Give me your top 2 options and tell me price level and why each one is a fit.", expectingDirectAnswer: true },
-      { msg: "If any earlier response had wrong format, correct it now in one concise line.", mustMention: ["format"], expectingDirectAnswer: true },
-      { msg: "Yes/no only: are you confident these options are currently available?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
+      { msg: "If any earlier response no longer fits my needs, please correct it now in one concise line.", mustMention: ["fit"], expectingDirectAnswer: true },
+      { msg: "How confident are you these options are currently available?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
       { msg: "What are the exact next steps I should take to book quickly?", expectingDirectAnswer: true },
     ],
   },
@@ -483,6 +573,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
     execution_started_at: new Date().toISOString(),
     sessions_planned: runSessions.length,
     turns_per_session: turnsPerSession,
+    question_set_id: QUESTION_SET_ID,
     all_turns_enabled: true,
     ...versionMeta,
     ...serverVersionMeta,
@@ -547,6 +638,8 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
           judgmentThreshold: "balanced",
           failureReasonType: "hard_rule",
           qualityAvg: 0.2,
+          missingExpectedTerms: [],
+          matchedExpectedTerms: [],
         };
       } else {
         evaluation = evaluateTurnHybrid({ botReply: replyText, turnCfg, sessionState: state });
@@ -564,6 +657,8 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
         judgment_threshold: evaluation.judgmentThreshold,
         failure_reason_type: evaluation.failureReasonType,
         quality_avg: evaluation.qualityAvg,
+        missing_expected_terms: evaluation.missingExpectedTerms || [],
+        matched_expected_terms: evaluation.matchedExpectedTerms || [],
       };
 
       allRows.push({
