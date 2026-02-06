@@ -6,6 +6,7 @@ const BASELINE_TESTS_PATH = new URL("./golden-prompts.json", import.meta.url);
 const MATRIX_TESTS_PATH = new URL("./golden-matrix.json", import.meta.url);
 const GOLDEN_MODE = (process.env.GOLDEN_MODE || "full").toLowerCase();
 const GOLDEN_SUITE = (process.env.GOLDEN_SUITE || "baseline").toLowerCase();
+const GOLDEN_FILTER = (process.env.GOLDEN_FILTER || "").trim();
 const CORE_TESTS = new Set([
   "availability-weekend",
   "amenity-followup",
@@ -121,8 +122,26 @@ async function loadTests() {
   );
 }
 
+function filterTests(tests) {
+  if (!GOLDEN_FILTER) return tests;
+  const matcher = GOLDEN_FILTER.toLowerCase();
+  const filtered = tests.filter((t) => {
+    const name = String(t.name || "").toLowerCase();
+    const sessionId = String(t.sessionId || "").toLowerCase();
+    const message = String(t.message || "").toLowerCase();
+    return name.includes(matcher) || sessionId.includes(matcher) || message.includes(matcher);
+  });
+  return filtered;
+}
+
 async function run() {
-  const tests = await loadTests();
+  const loadedTests = await loadTests();
+  const tests = filterTests(loadedTests);
+  if (!tests.length) {
+    throw new Error(
+      `No golden tests matched GOLDEN_FILTER="${GOLDEN_FILTER}".`
+    );
+  }
 
   let server = null;
   if (!process.env.BASE_URL) {
@@ -165,7 +184,9 @@ async function run() {
   }
 
   console.log(
-    `\n✅ Golden prompts PASSED (${passed} tests, mode=${GOLDEN_MODE}, suite=${GOLDEN_SUITE})`
+    `\n✅ Golden prompts PASSED (${passed} tests, mode=${GOLDEN_MODE}, suite=${GOLDEN_SUITE}${
+      GOLDEN_FILTER ? `, filter=${GOLDEN_FILTER}` : ""
+    })`
   );
 }
 

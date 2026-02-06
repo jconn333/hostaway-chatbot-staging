@@ -46,7 +46,7 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const INVENTORY_AVAILABILITY_CONCURRENCY = 5;
 const INVENTORY_AVAILABILITY_MAX = 20;
-const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-5-mini";
+const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-4o-mini";
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-5-mini";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -430,6 +430,10 @@ function extractCapacityQuery(message) {
   const cap = {};
   const sleeps = msg.match(/\b(sleeps?|guests?|people|persons?)\s*(\d+)\b/);
   if (sleeps) cap.sleeps = Number(sleeps[2]);
+  const peopleFirst = msg.match(/\b(\d+)\s*(guests?|people|persons?)\b/);
+  if (!cap.sleeps && peopleFirst) cap.sleeps = Number(peopleFirst[1]);
+  const groupOf = msg.match(/\bgroup\s+of\s+(\d+)\b/);
+  if (!cap.sleeps && groupOf) cap.sleeps = Number(groupOf[1]);
   const beds = msg.match(/\b(\d+)\s*beds?\b/);
   if (beds) cap.beds = Number(beds[1]);
   const bedrooms = msg.match(/\b(\d+)\s*bedrooms?\b/);
@@ -957,6 +961,7 @@ app.post("/chat", async (req, res) => {
     setDebugHeader("PolicyIntent", policyIntentRaw);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
     const capacityFactQuestion = isCapacityFactQuestion(normalizedMessage);
+    const capacityQuery = extractCapacityQuery(normalizedMessage);
     let inventoryIntent =
       isInventoryQuery(normalizedMessage) ||
       ["inventory_availability", "amenity_inventory", "policy"].includes(effectiveIntent);
@@ -969,6 +974,7 @@ app.post("/chat", async (req, res) => {
     if (session?.listingId && directBookingRequest) {
       inventoryIntent = false;
     }
+    const inventoryCapacityIntent = Boolean(capacityQuery) && inventoryIntent;
     setDebugHeader("InventoryIntent", inventoryIntent);
 
     const tokenData = await getHostawayAccessToken();
@@ -1130,8 +1136,7 @@ app.post("/chat", async (req, res) => {
 
     // ---------- INVENTORY-WIDE CAPACITY QUESTIONS ----------
     if (inventoryIntent) {
-      const cap = extractCapacityQuery(userMessage);
-      if (cap) {
+      if (capacityQuery) {
         const results = await mapWithConcurrency(
           listings,
           INVENTORY_AVAILABILITY_CONCURRENCY,
@@ -1140,10 +1145,10 @@ app.post("/chat", async (req, res) => {
               const listing = await fetchListingByIdCached(l.id, accessToken);
               const safe = toSafeListingFacts(listing, { audience: "postbooking" });
               const ok =
-                (cap.sleeps ? safe.sleeps >= cap.sleeps : true) &&
-                (cap.bedrooms ? safe.bedrooms >= cap.bedrooms : true) &&
-                (cap.bathrooms ? safe.bathrooms >= cap.bathrooms : true) &&
-                (cap.beds ? safe.beds >= cap.beds : true);
+                (capacityQuery.sleeps ? safe.sleeps >= capacityQuery.sleeps : true) &&
+                (capacityQuery.bedrooms ? safe.bedrooms >= capacityQuery.bedrooms : true) &&
+                (capacityQuery.bathrooms ? safe.bathrooms >= capacityQuery.bathrooms : true) &&
+                (capacityQuery.beds ? safe.beds >= capacityQuery.beds : true);
               if (ok) {
                 return `• [${safe.name}](${safe.bookingUrl}) — Sleeps ${safe.sleeps}, ${safe.bedrooms} bd`;
               }
@@ -1197,54 +1202,59 @@ app.post("/chat", async (req, res) => {
     // Detect listing from message if not explicitly provided
     if (!listingId) {
       const amenityIntent = detectAmenityQuery(normalizedMessage);
+      if (inventoryCapacityIntent) {
+        // Avoid false numeric listing matches (e.g. "group of 10" -> "Cottage #10")
+        setDebugHeader("ListingDetect", "skipped_inventory_capacity");
+      } else {
       const detected = inventoryIntent
         ? findListingIdFromMessageStrong(normalizedMessage, listings)
         : findListingIdFromMessage(normalizedMessage, listings);
-      if (detected) {
-        listingId = detected;
-        setSession(sessionId, { listingId });
-      } else if (session?.listingId && directBookingRequest) {
-        listingId = session.listingId;
-        memoryNote = "\n\n(Using your last unit from this session.)";
-      } else if (
-        session?.listingId &&
-        capacityFactQuestion &&
-        !looksLikeGenericUnitReference(userMessage)
-      ) {
-        // Keep unit-level capacity/fact follow-ups pinned to the active session unit.
-        listingId = session.listingId;
-        memoryNote = "\n\n(Using your last unit from this session.)";
-      } else if (session?.listingId && !inventoryIntent) {
-        // Only reuse session unit when user implies continuity (e.g., "same/that one")
-        // or the message doesn't reference a generic unit category.
-        if (
-          looksLikeSameMessageReference(userMessage) ||
+        if (detected) {
+          listingId = detected;
+          setSession(sessionId, { listingId });
+        } else if (session?.listingId && directBookingRequest) {
+          listingId = session.listingId;
+          memoryNote = "\n\n(Using your last unit from this session.)";
+        } else if (
+          session?.listingId &&
+          capacityFactQuestion &&
+          !looksLikeGenericUnitReference(userMessage)
+        ) {
+          // Keep unit-level capacity/fact follow-ups pinned to the active session unit.
+          listingId = session.listingId;
+          memoryNote = "\n\n(Using your last unit from this session.)";
+        } else if (session?.listingId && !inventoryIntent) {
+          // Only reuse session unit when user implies continuity (e.g., "same/that one")
+          // or the message doesn't reference a generic unit category.
+          if (
+            looksLikeSameMessageReference(userMessage) ||
+            !looksLikeGenericUnitReference(userMessage)
+          ) {
+            listingId = session.listingId;
+            memoryNote = "\n\n(Using your last unit from this session.)";
+          }
+        } else if (
+          session?.listingId &&
+          policyIntentRaw &&
+          !looksLikeInventoryWidePolicyRequest(normalizedMessage)
+        ) {
+          // Policy/time follow-ups ("what time is check in?") should stay on current unit.
+          listingId = session.listingId;
+          memoryNote = "\n\n(Using your last unit from this session.)";
+        } else if (
+          session?.listingId &&
+          looksLikeFollowupQuestion(userMessage) &&
           !looksLikeGenericUnitReference(userMessage)
         ) {
           listingId = session.listingId;
           memoryNote = "\n\n(Using your last unit from this session.)";
-        }
-      } else if (
-        session?.listingId &&
-        policyIntentRaw &&
-        !looksLikeInventoryWidePolicyRequest(normalizedMessage)
-      ) {
-        // Policy/time follow-ups ("what time is check in?") should stay on current unit.
-        listingId = session.listingId;
-        memoryNote = "\n\n(Using your last unit from this session.)";
-      } else if (
-        session?.listingId &&
-        looksLikeFollowupQuestion(userMessage) &&
-        !looksLikeGenericUnitReference(userMessage)
-      ) {
-        listingId = session.listingId;
-        memoryNote = "\n\n(Using your last unit from this session.)";
-      } else if (session?.lastMessage && looksLikeSameMessageReference(userMessage)) {
-        const fromLast = findListingIdFromMessage(normalizeUserMessage(session.lastMessage), listings);
-        if (fromLast) {
-          listingId = fromLast;
-          setSession(sessionId, { listingId });
-          memoryNote = "\n\n(Using your last unit from this session.)";
+        } else if (session?.lastMessage && looksLikeSameMessageReference(userMessage)) {
+          const fromLast = findListingIdFromMessage(normalizeUserMessage(session.lastMessage), listings);
+          if (fromLast) {
+            listingId = fromLast;
+            setSession(sessionId, { listingId });
+            memoryNote = "\n\n(Using your last unit from this session.)";
+          }
         }
       }
     }

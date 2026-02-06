@@ -374,6 +374,16 @@
     "expectRegex": []
   },
   {
+    "name": "inventory-capacity-group-of",
+    "sessionId": "golden-capacity",
+    "message": "I have a group of 10 people are any of your units big enough?",
+    "expectOneOfIncludes": [
+      "Units that match your request",
+      "I didn’t find any units that match that capacity."
+    ],
+    "expectRegex": []
+  },
+  {
     "name": "deep-treehouse-weekend-1",
     "sessionId": "golden-deep-treehouse",
     "message": "Is treehouse 3 available next weekend?",
