@@ -389,6 +389,53 @@ function monthQueryToRange(message, timeZone = "America/New_York") {
   return { start, end, monthName };
 }
 
+function isAllUnitTypesScopeRequest(message) {
+  const msg = String(message || "").toLowerCase();
+  return (
+    /\b(all|any)\s+(unit types|units|properties|listings|accommodations)\b/.test(msg) ||
+    /\bcheck all\b/.test(msg) ||
+    /\ball types\b/.test(msg)
+  );
+}
+
+function hasResultSetPronounReference(message) {
+  const msg = String(message || "").toLowerCase();
+  return /\b(they|them|those|any of those|any of them|those ones|of those)\b/.test(msg);
+}
+
+function isLikelyUnitSwitchPrompt(message) {
+  const msg = String(message || "").toLowerCase();
+  const mentionsSwitch = /\b(what about|how about|tell me about|and what about)\b/.test(msg);
+  const hasAvailabilitySignal =
+    /\b(available|availability|book|booking|dates?|when|tonight|tomorrow|weekend|check[- ]?in|check[- ]?out)\b/.test(
+      msg
+    );
+  return mentionsSwitch && !hasAvailabilitySignal;
+}
+
+function shiftIsoRange(dates, days) {
+  if (!dates?.start || !dates?.end) return null;
+  return {
+    start: addDays(dates.start, days),
+    end: addDays(dates.end, days),
+  };
+}
+
+function resolveRelativeDatesFromSession(message, sessionDates) {
+  const msg = String(message || "").toLowerCase();
+  if (!sessionDates?.start || !sessionDates?.end) return null;
+  if (/\b(following|after that|week after)\s+weekend\b/.test(msg)) {
+    return shiftIsoRange(sessionDates, 7);
+  }
+  if (/\b(two weekends? after|in two weekends?)\b/.test(msg)) {
+    return shiftIsoRange(sessionDates, 14);
+  }
+  if (/\bsame dates?\b/.test(msg)) {
+    return { start: sessionDates.start, end: sessionDates.end };
+  }
+  return null;
+}
+
 function wantsEvidenceLine(message) {
   const msg = (message || "").toLowerCase();
   return /\b(source|evidence|how sure|confidence|how do you know|why)\b/.test(msg);
@@ -615,9 +662,19 @@ function detectRecommendationIntent(message) {
 
 function isDirectBookingRequest(message) {
   const msg = (message || "").toLowerCase();
-  return /\b(book it|book this|book that|reserve it|reserve this|reserve that|book now)\b/.test(
+  return /\b(book it|book this|book that|reserve it|reserve this|reserve that|book now|can you book|book .* for me|help me book)\b/.test(
     msg
   );
+}
+
+function isBookingActionRequest(message) {
+  const msg = (message || "").toLowerCase();
+  const bookingVerb =
+    msg.includes("book") ||
+    msg.includes("reserve") ||
+    msg.includes("reservation");
+  const planningOnly = isBookingStepsRequest(msg);
+  return bookingVerb && !planningOnly;
 }
 
 function isInventoryQuery(message) {
@@ -1174,6 +1231,13 @@ function formatBookLink(url, label = "Book these dates") {
   return `[${label}](${url})`;
 }
 
+function formatPetFriendlyHeading(unitType) {
+  const t = String(unitType || "").trim().toLowerCase();
+  if (!t) return "Pet-friendly units:";
+  const plural = t.endsWith("s") ? t : `${t}s`;
+  return `Pet-friendly ${plural}:`;
+}
+
 function formatCheckTimes(safe) {
   const ci = formatCheckInRange(safe.checkInStart, safe.checkInEnd);
   const co = safe.checkOut ? `Check‑out ${formatTime12(safe.checkOut) || safe.checkOut}` : "";
@@ -1650,17 +1714,22 @@ app.post("/chat", async (req, res) => {
             dates: session.scopeMemory?.dates || null,
           }
         : null;
-    const followupInventory =
-      looksLikeFollowupQuestion(userMessage) && session?.lastInventory
-        ? session.lastInventory
-        : looksLikeFollowupQuestion(userMessage)
-          ? scopedInventoryFromSession
-          : null;
+    const useInventoryMemory =
+      Boolean(session?.lastInventory) &&
+      (looksLikeFollowupQuestion(userMessage) ||
+        isAvailabilityQuestion(normalizedMessage) ||
+        isAllUnitTypesScopeRequest(normalizedMessage));
+    const followupInventory = useInventoryMemory
+      ? session.lastInventory
+      : looksLikeFollowupQuestion(userMessage)
+        ? scopedInventoryFromSession
+        : null;
     const refersToPriorResultSet =
-      /\b(they|them|those|any of those|any of them|those ones)\b/i.test(userMessage || "") &&
+      hasResultSetPronounReference(userMessage) &&
       Array.isArray(session?.activeResultSet?.listingIds) &&
       session.activeResultSet.listingIds.length > 0;
     const directBookingRequest = isDirectBookingRequest(normalizedMessage);
+    const bookingActionRequested = isBookingActionRequest(normalizedMessage);
     const llmFirstEnabled = String(process.env.LLM_FIRST_MODE || "1") === "1";
     const plan = llmFirstEnabled
       ? await planTurn(normalizedMessage, {
@@ -1844,7 +1913,39 @@ app.post("/chat", async (req, res) => {
           session?.lastPolicyIntent ||
           session?.lastIntent === "availability"
       );
-    if (executionPlan.shouldClarify && !followupHasContext) {
+    const bookingVerbInMessage =
+      String(normalizedMessage || "").toLowerCase().includes("book") ||
+      String(normalizedMessage || "").toLowerCase().includes("reserve");
+    const explicitBookFollowup =
+      /\b(can you|could you|please)\s+book\b/i.test(normalizedMessage) ||
+      /\bbook\s+(it|this|that)\b/i.test(normalizedMessage) ||
+      /\bbook\b.*\bfor me\b/i.test(normalizedMessage);
+    const bookingOnlyTurn =
+      bookingVerbInMessage || explicitBookFollowup || directBookingRequest || bookingActionRequested;
+    const canAutoHandleBookingFromSession =
+      bookingOnlyTurn && Boolean(session?.listingId) && !looksLikeSummaryRequest(normalizedMessage);
+    if (canAutoHandleBookingFromSession) {
+      const sessionListingId = String(session.listingId);
+      listingId = sessionListingId;
+      const baseUrl = `https://book.amishcountrylodging.com/listings/${sessionListingId}`;
+      const bookUrl =
+        session?.dates?.start && session?.dates?.end
+          ? `${baseUrl}?start=${session.dates.start}&end=${session.dates.end}`
+          : baseUrl;
+      return sendReply(
+        appendFollowupIfMissing(
+          `Absolutely — here’s your booking link:\n\nBook now: ${formatBookLink(bookUrl)}` +
+            "\n\n(Using your last unit from this session.)",
+          "Would you like me to check other dates?"
+        ),
+        {
+          route: "availability",
+          dates: session?.dates || null,
+          replyType: "availability",
+        }
+      );
+    }
+    if (executionPlan.shouldClarify && !followupHasContext && !canAutoHandleBookingFromSession) {
       return sendReply(executionPlan.clarificationQuestion, {
         route: "clarification",
         replyType: "summary",
@@ -1863,6 +1964,8 @@ app.post("/chat", async (req, res) => {
     setDebugHeader("IntentSource", executionPlan.intentSource);
     setDebugHeader("PlanScope", executionPlan.scope);
     setDebugHeader("PlanUseSession", executionPlan.useSessionUnit);
+    setDebugHeader("DirectBooking", directBookingRequest ? "1" : "0");
+    setDebugHeader("BookingAction", bookingActionRequested ? "1" : "0");
     setDebugHeader("CodeVersion", CODE_VERSION);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
     const capacityFactQuestion = isCapacityFactQuestion(normalizedMessage);
@@ -1881,7 +1984,7 @@ app.post("/chat", async (req, res) => {
     if (session?.listingId && capacityFactQuestion && !looksLikeGenericUnitReference(userMessage)) {
       inventoryIntent = false;
     }
-    if (session?.listingId && directBookingRequest) {
+    if (session?.listingId && bookingActionRequested) {
       inventoryIntent = false;
     }
     const inventoryCapacityIntent =
@@ -2234,8 +2337,19 @@ app.post("/chat", async (req, res) => {
           }
         }
 
+        const scopedListingIds = Array.isArray(session?.activeResultSet?.listingIds)
+          ? new Set(session.activeResultSet.listingIds.map((x) => String(x)))
+          : null;
+        const pronounScopedCapacity =
+          hasResultSetPronounReference(userMessage) &&
+          scopedListingIds &&
+          scopedListingIds.size > 0;
+        const capacitySourceListings = pronounScopedCapacity
+          ? listings.filter((l) => scopedListingIds.has(String(l.id)))
+          : listings;
+
         const results = await mapWithConcurrency(
-          listings,
+          capacitySourceListings,
           INVENTORY_AVAILABILITY_CONCURRENCY,
           async (l) => {
             try {
@@ -2366,8 +2480,8 @@ app.post("/chat", async (req, res) => {
         },
       });
 
-      const label = petUnitType ? `pet‑friendly ${petUnitType}s` : "pet‑friendly";
-      return sendReply(`Units with (${label}):\n\n${lines.join("\n")}`, {
+      const heading = formatPetFriendlyHeading(petUnitType);
+      return sendReply(`${heading}\n\n${lines.join("\n")}`, {
         route: "amenity_inventory",
         inventoryFilters: {
           amenityKeys: [],
@@ -2410,7 +2524,7 @@ app.post("/chat", async (req, res) => {
       ) {
         listingId = session.listingId;
         memoryNote = "\n\n(Using your last unit from this session.)";
-      } else if (session?.listingId && directBookingRequest) {
+      } else if (session?.listingId && bookingActionRequested) {
         listingId = session.listingId;
         memoryNote = "\n\n(Using your last unit from this session.)";
         } else if (
@@ -2462,8 +2576,12 @@ app.post("/chat", async (req, res) => {
     if (
       !listingId &&
       session?.listingId &&
-      looksLikeFollowupQuestion(userMessage) &&
-      isAvailabilityQuestion(normalizedMessage) &&
+      (looksLikeFollowupQuestion(userMessage) ||
+        bookingActionRequested ||
+        isBookingStepsRequest(normalizedMessage)) &&
+      (isAvailabilityQuestion(normalizedMessage) ||
+        bookingActionRequested ||
+        isBookingStepsRequest(normalizedMessage)) &&
       !isInventoryAvailabilityQuestion(normalizedMessage)
     ) {
       listingId = session.listingId;
@@ -2502,9 +2620,12 @@ app.post("/chat", async (req, res) => {
       ) {
         dates = followupInventory.dates;
       }
-      const unitType =
-        detectUnitType(normalizedMessage) ||
-        (followupInventory?.type === "availability" ? followupInventory.unitType : null);
+      const allUnitTypesRequested = isAllUnitTypesScopeRequest(normalizedMessage);
+      const requestedUnitType = detectUnitType(normalizedMessage);
+      const unitType = allUnitTypesRequested
+        ? null
+        : requestedUnitType ||
+          (followupInventory?.type === "availability" ? followupInventory.unitType : null);
       if (unitType) setDebugHeader("UnitType", unitType);
       if (dates) {
         setDebugHeader("Dates", `${dates.start}..${dates.end}`);
@@ -2536,9 +2657,7 @@ app.post("/chat", async (req, res) => {
               ? new Set(session.activeResultSet.listingIds.map((x) => String(x)))
               : null;
             const canUseActiveSet =
-              /\b(they|them|those|any of (them|those)|those ones)\b/i.test(userMessage || "") &&
-              activeIds &&
-              activeIds.size > 0;
+              hasResultSetPronounReference(userMessage) && activeIds && activeIds.size > 0;
             if (canUseActiveSet) {
               const scoped = listings.filter((l) => activeIds.has(String(l.id)));
               if (scoped.length) return scoped;
@@ -2813,7 +2932,16 @@ app.post("/chat", async (req, res) => {
           })
         );
 
-        let matches = safes;
+        const scopedListingIds = Array.isArray(session?.activeResultSet?.listingIds)
+          ? new Set(session.activeResultSet.listingIds.map((x) => String(x)))
+          : null;
+        const pronounScopedAmenity =
+          hasResultSetPronounReference(userMessage) &&
+          scopedListingIds &&
+          scopedListingIds.size > 0;
+        let matches = pronounScopedAmenity
+          ? safes.filter((s) => scopedListingIds.has(String(s.id)))
+          : safes;
         if (effectiveAmenityKeys.length) {
           matches = matches.filter((s) =>
             effectiveAmenityKeys.every((k) => hasAmenity(s, k))
@@ -2854,9 +2982,12 @@ app.post("/chat", async (req, res) => {
         if (effectiveAmenityKeys.length) labelParts.push(effectiveAmenityKeys.join(" + "));
         if (wantsPetFriendly) labelParts.push("pet‑friendly");
         if (unitType) labelParts.push(unitType);
-        const label = labelParts.length ? ` (${labelParts.join(", ")})` : "";
+        const petFriendlyOnly = wantsPetFriendly && effectiveAmenityKeys.length === 0;
+        const heading = petFriendlyOnly
+          ? formatPetFriendlyHeading(unitType)
+          : `Units with${labelParts.length ? ` (${labelParts.join(", ")})` : ""}:`;
 
-        return sendReply(`Units with${label}:\n\n${lines}`, {
+        return sendReply(`${heading}\n\n${lines}`, {
           route: "amenity_inventory",
           inventoryFilters: {
             amenityKeys: effectiveAmenityKeys,
@@ -3001,7 +3132,7 @@ app.post("/chat", async (req, res) => {
       );
     }
 
-    if (listingId && directBookingRequest) {
+    if (listingId && bookingActionRequested && !isAvailabilityQuestion(normalizedMessage)) {
       const listing = await fetchListingByIdCached(listingId, accessToken);
       const safe = toSafeListingFacts(listing, { audience: "postbooking" });
       let bookUrl = safe.bookingUrl;
@@ -3021,6 +3152,21 @@ app.post("/chat", async (req, res) => {
       );
     }
 
+    if (listingId && capacityFactQuestion && !isAvailabilityQuestion(normalizedMessage)) {
+      const listing = await fetchListingByIdCached(listingId, accessToken);
+      const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+      const capacityReply = capacityAnswerFromFacts(safe, normalizedMessage);
+      if (capacityReply) {
+        return sendReply(
+          appendFollowupIfMissing(
+            capacityReply + memoryNote,
+            "Want me to check availability for specific dates?"
+          ),
+          { route: "summary", replyType: "summary" }
+        );
+      }
+    }
+
     const wantsNextAvailableWeekend =
       listingId &&
       /\bnext available weekend\b|\bnext weekend available\b|\bwhen.*next weekend\b|\bnext weekend\b.*\bavailable\b/i.test(
@@ -3028,6 +3174,9 @@ app.post("/chat", async (req, res) => {
       );
 
     let dates = extractDates(normalizedMessage);
+    if (!dates) {
+      dates = resolveRelativeDatesFromSession(normalizedMessage, session?.dates);
+    }
     const monthRange = monthQueryToRange(normalizedMessage);
     // Availability flow should be driven by explicit availability/date signals
     // plus true availability follow-ups from session context.
@@ -3127,6 +3276,7 @@ app.post("/chat", async (req, res) => {
     if (
       listingId &&
       !dates &&
+      !isLikelyUnitSwitchPrompt(normalizedMessage) &&
       (isAvailabilityQuestion(normalizedMessage) || effectiveIntent === "availability")
     ) {
       return sendReply(

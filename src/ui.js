@@ -91,6 +91,20 @@ export function getSandboxHtml() {
       overflow:hidden;
     }
 
+    .mainGrid{
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) 320px;
+      min-height:560px;
+      height:min(72vh, 780px);
+    }
+
+    @media (max-width: 980px){
+      .mainGrid{
+        grid-template-columns:1fr;
+        height:auto;
+      }
+    }
+
     .toolbar{
       display:grid;
       grid-template-columns:1fr 1fr auto;
@@ -131,12 +145,13 @@ export function getSandboxHtml() {
     .chatWrap{
       display:flex;
       flex-direction:column;
-      min-height:560px;
-      max-height:72vh;
+      min-height:0;
+      height:100%;
     }
 
     .chat{
       flex:1;
+      min-height:0;
       overflow:auto;
       padding:14px;
       display:flex;
@@ -155,17 +170,6 @@ export function getSandboxHtml() {
       font-size:14px;
     }
 
-    .bubbleWrap{
-      display:flex;
-      flex-direction:column;
-      gap:6px;
-      align-items:flex-start;
-    }
-
-    .bubbleWrap.user{
-      align-items:flex-end;
-    }
-
     .bubble.bot{
       background:var(--bubble-bot);
       align-self:flex-start;
@@ -175,15 +179,6 @@ export function getSandboxHtml() {
       background:var(--bubble-user);
       border-color:rgba(56,189,248,.36);
       align-self:flex-end;
-    }
-
-    .feedbackRow{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      color:var(--muted);
-      font-size:12px;
-      padding-left:6px;
     }
 
     .feedbackBtn{
@@ -202,8 +197,85 @@ export function getSandboxHtml() {
       background:rgba(56,189,248,.16);
     }
 
+    .feedbackBtn.active{
+      border-color:rgba(34,197,94,.65);
+      background:rgba(34,197,94,.18);
+    }
+
     .feedbackSaved{
       color:#86efac;
+    }
+
+    .feedbackPanel{
+      border-left:1px solid rgba(148,163,184,.16);
+      background:rgba(15,23,42,.42);
+      padding:14px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      overflow:auto;
+    }
+
+    .feedbackPanel h3{
+      margin:0;
+      font-family:"Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+      font-size:16px;
+      letter-spacing:.2px;
+    }
+
+    .feedbackHint{
+      margin:0;
+      font-size:12px;
+      color:var(--muted);
+      line-height:1.4;
+    }
+
+    .voteRow{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+
+    .feedbackPanel textarea{
+      min-height:120px;
+      resize:vertical;
+    }
+
+    .optionalDetails{
+      border:1px solid rgba(148,163,184,.2);
+      border-radius:10px;
+      padding:8px 10px;
+      background:rgba(15,23,42,.32);
+    }
+
+    .optionalDetails summary{
+      cursor:pointer;
+      color:var(--muted);
+      font-size:12px;
+      font-weight:600;
+      outline:none;
+      list-style:none;
+    }
+
+    .optionalDetails summary::-webkit-details-marker{
+      display:none;
+    }
+
+    .optionalDetails summary::before{
+      content:"▸";
+      margin-right:6px;
+      color:var(--muted);
+    }
+
+    .optionalDetails[open] summary::before{
+      content:"▾";
+    }
+
+    .optionalBody{
+      margin-top:8px;
+      display:flex;
+      flex-direction:column;
+      gap:8px;
     }
 
     .bubble a{
@@ -328,27 +400,59 @@ export function getSandboxHtml() {
         </div>
       </div>
 
-      <div class="chatWrap">
-        <div class="chat" id="chat"></div>
-        <div class="composer">
-          <label>Message</label>
-          <textarea id="question" placeholder="Example: Is Red Fern Cabin available from 2026-03-24 to 2026-03-26?"></textarea>
-          <div class="actions">
-            <div class="btnRow">
-              <button class="btn primary" id="sendBtn">Send</button>
-              <button class="btn" id="clearBtn">Clear Chat</button>
-              <button class="btn" id="resetSessionBtn">Reset Session</button>
-            </div>
-            <div class="meta">
-              <span class="dot" id="sendDot"></span>
-              <span id="sendStatus">Ready</span>
-              <span class="badge" id="charCount">0 chars</span>
-              <span class="badge" id="codeVersionBadge">code: unknown</span>
+      <div class="mainGrid">
+        <div class="chatWrap">
+          <div class="chat" id="chat"></div>
+          <div class="composer">
+            <label>Message</label>
+            <textarea id="question" placeholder="Example: Is Red Fern Cabin available from 2026-03-24 to 2026-03-26?"></textarea>
+            <div class="actions">
+              <div class="btnRow">
+                <button class="btn primary" id="sendBtn">Send</button>
+                <button class="btn" id="clearBtn">Clear Chat</button>
+                <button class="btn" id="resetSessionBtn">Reset Session</button>
+              </div>
+              <div class="meta">
+                <span class="dot" id="sendDot"></span>
+                <span id="sendStatus">Ready</span>
+                <span class="badge" id="charCount">0 chars</span>
+                <span class="badge" id="codeVersionBadge">code: unknown</span>
+              </div>
             </div>
           </div>
         </div>
+        <aside class="feedbackPanel">
+          <h3>Conversation Feedback</h3>
+          <p class="feedbackHint">Rate the full chat, then submit. This saves feedback, starts a new session ID, and clears the conversation.</p>
+          <div class="voteRow">
+            <button class="feedbackBtn" id="convUpBtn" type="button">👍</button>
+            <button class="feedbackBtn" id="convDownBtn" type="button">👎</button>
+          </div>
+          <details class="optionalDetails">
+            <summary>Add details (optional)</summary>
+            <div class="optionalBody">
+              <div>
+                <label>Tags (comma-separated)</label>
+                <input id="convTags" placeholder="e.g., wrong_route, context_lost, good_tone" />
+              </div>
+              <div>
+                <label>Notes</label>
+                <textarea id="convNote" placeholder="What worked or what failed?"></textarea>
+              </div>
+            </div>
+          </details>
+          <div class="btnRow">
+            <button class="btn primary" id="submitFeedbackBtn" type="button">Submit Feedback</button>
+            <button class="btn" id="resetFeedbackBtn" type="button">Reset Feedback</button>
+          </div>
+          <div class="meta">
+            <span class="dot" id="feedbackDot"></span>
+            <span id="feedbackStatus">Not submitted</span>
+          </div>
+        </aside>
       </div>
     </div>
+  </div>
   </div>
 
   <script>
@@ -366,9 +470,18 @@ export function getSandboxHtml() {
     const apiStatus = el("apiStatus");
     const charCount = el("charCount");
     const codeVersionBadge = el("codeVersionBadge");
+    const convUpBtn = el("convUpBtn");
+    const convDownBtn = el("convDownBtn");
+    const convTags = el("convTags");
+    const convNote = el("convNote");
+    const submitFeedbackBtn = el("submitFeedbackBtn");
+    const resetFeedbackBtn = el("resetFeedbackBtn");
+    const feedbackStatus = el("feedbackStatus");
+    const feedbackDot = el("feedbackDot");
     let currentCodeVersion = "unknown";
     let turnNumber = 0;
     const transcript = [];
+    let conversationVote = null;
 
     const savedName = localStorage.getItem("sandboxTesterName");
     if (savedName) testerName.value = savedName;
@@ -443,13 +556,10 @@ export function getSandboxHtml() {
     }
 
     function addUserBubble(text){
-      const wrap = document.createElement("div");
-      wrap.className = "bubbleWrap user";
       const div = document.createElement("div");
       div.className = "bubble user";
       div.textContent = text;
-      wrap.appendChild(div);
-      chat.appendChild(wrap);
+      chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
     }
 
@@ -462,77 +572,45 @@ export function getSandboxHtml() {
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "feedback failed");
-        rowEl.innerHTML = '<span class="feedbackSaved">Saved feedback</span>';
+        feedbackStatus.textContent = "Feedback saved";
+        feedbackStatus.classList.add("feedbackSaved");
+        feedbackDot.classList.add("good");
+        if (rowEl) rowEl.innerHTML = '<span class="feedbackSaved">Saved feedback</span>';
       } catch (err) {
-        rowEl.innerHTML = '<span>Feedback failed to save</span>';
+        feedbackStatus.textContent = "Feedback failed to save";
+        feedbackStatus.classList.remove("feedbackSaved");
+        feedbackDot.classList.remove("good");
+        if (rowEl) rowEl.innerHTML = '<span>Feedback failed to save</span>';
       }
     }
 
-    function promptFeedbackMeta(){
-      const tagsRaw = window.prompt(
-        "Optional tags (comma-separated). Example: context_lost,wrong_route,bad_tone",
-        ""
-      );
-      const note = window.prompt("Optional note (why?)", "") || "";
-      const tags = String(tagsRaw || "")
-        .split(",")
-        .map((x) => x.trim())
-        .filter(Boolean)
-        .slice(0, 12);
-      return { tags, note };
-    }
-
     function addBotBubble(text, ctx){
-      const wrap = document.createElement("div");
-      wrap.className = "bubbleWrap";
       const div = document.createElement("div");
       div.className = "bubble bot";
       div.innerHTML = formatBotText(text);
-      wrap.appendChild(div);
-
-      const row = document.createElement("div");
-      row.className = "feedbackRow";
-      row.innerHTML = '<span>Feedback:</span>';
-      const up = document.createElement("button");
-      up.className = "feedbackBtn";
-      up.type = "button";
-      up.textContent = "Thumbs up";
-      const down = document.createElement("button");
-      down.className = "feedbackBtn";
-      down.type = "button";
-      down.textContent = "Thumbs down";
-      row.appendChild(up);
-      row.appendChild(down);
-
-      const onVote = (vote) => {
-        const extra = promptFeedbackMeta();
-        const payload = {
-          feedback: vote,
-          codeVersion: currentCodeVersion,
-          testerName: testerName.value.trim() || null,
-          sessionId: ctx.sessionId,
-          listingId: Number.isFinite(ctx.listingId) ? String(ctx.listingId) : null,
-          turnNumber: ctx.turnNumber,
-          userMessage: ctx.userMessage || null,
-          botReply: text || null,
-          tags: extra.tags,
-          note: extra.note,
-          transcript: transcript.slice(-30),
-          meta: {
-            page: "sandbox",
-            sentAt: new Date().toISOString()
-          }
-        };
-        up.disabled = true;
-        down.disabled = true;
-        sendFeedback(payload, row);
-      };
-
-      up.addEventListener("click", () => onVote("up"));
-      down.addEventListener("click", () => onVote("down"));
-      wrap.appendChild(row);
-      chat.appendChild(wrap);
+      chat.appendChild(div);
       chat.scrollTop = chat.scrollHeight;
+    }
+
+    function setConversationVote(vote){
+      conversationVote = vote;
+      convUpBtn.classList.toggle("active", vote === "up");
+      convDownBtn.classList.toggle("active", vote === "down");
+    }
+
+    function resetConversationState(){
+      chat.innerHTML = "";
+      transcript.length = 0;
+      turnNumber = 0;
+    }
+
+    function resetFeedbackForm(){
+      setConversationVote(null);
+      convTags.value = "";
+      convNote.value = "";
+      feedbackStatus.textContent = "Not submitted";
+      feedbackStatus.classList.remove("feedbackSaved");
+      feedbackDot.classList.remove("good");
     }
 
     function setSending(isSending){
@@ -631,10 +709,61 @@ export function getSandboxHtml() {
 
     sendBtn.addEventListener("click", ask);
     clearBtn.addEventListener("click", () => {
-      chat.innerHTML = "";
-      transcript.length = 0;
-      turnNumber = 0;
+      resetConversationState();
       question.focus();
+    });
+    convUpBtn.addEventListener("click", () => setConversationVote("up"));
+    convDownBtn.addEventListener("click", () => setConversationVote("down"));
+    resetFeedbackBtn.addEventListener("click", () => resetFeedbackForm());
+    submitFeedbackBtn.addEventListener("click", async () => {
+      if (!conversationVote) {
+        feedbackStatus.textContent = "Select thumbs up or down first";
+        feedbackStatus.classList.remove("feedbackSaved");
+        feedbackDot.classList.remove("good");
+        return;
+      }
+      if (!transcript.length) {
+        feedbackStatus.textContent = "No conversation to submit yet";
+        feedbackStatus.classList.remove("feedbackSaved");
+        feedbackDot.classList.remove("good");
+        return;
+      }
+      const sid = (sessionId.value || "").trim();
+      const lidRaw = (listingId.value || "").trim();
+      const lid = lidRaw ? Number(lidRaw) : null;
+      const tags = String(convTags.value || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .slice(0, 12);
+      const lastTurn = transcript[transcript.length - 1] || {};
+      const payload = {
+        feedback: conversationVote,
+        codeVersion: currentCodeVersion,
+        testerName: testerName.value.trim() || null,
+        sessionId: sid,
+        listingId: Number.isFinite(lid) ? String(lid) : null,
+        turnNumber: Math.max(1, transcript.length),
+        userMessage: String(lastTurn.userMessage || ""),
+        botReply: String(lastTurn.botReply || ""),
+        tags,
+        note: String(convNote.value || "").trim(),
+        transcript: transcript.slice(-40),
+        meta: {
+          page: "sandbox",
+          scope: "conversation",
+          turns: transcript.length,
+          sentAt: new Date().toISOString()
+        }
+      };
+      await sendFeedback(payload, null);
+      if (feedbackStatus.classList.contains("feedbackSaved")) {
+        const sidNew = generateSessionId();
+        sessionId.value = sidNew;
+        localStorage.setItem("sandboxSessionId", sidNew);
+        resetConversationState();
+        resetFeedbackForm();
+      }
     });
 
     question.addEventListener("keydown", (e) => {
@@ -645,6 +774,7 @@ export function getSandboxHtml() {
     });
 
     setSending(false);
+    resetFeedbackForm();
     checkApi();
   </script>
 </body>

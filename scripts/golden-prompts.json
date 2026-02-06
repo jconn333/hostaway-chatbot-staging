@@ -54,8 +54,12 @@
     "sessionId": "golden-pets",
     "message": "Which suites are pet friendly?",
     "expectIncludes": [
-      "Units with",
       "Suite"
+    ],
+    "expectOneOfIncludes": [
+      "Pet-friendly suites:",
+      "Units with (pet‑friendly, suite):",
+      "Units with (pet-friendly, suite):"
     ],
     "expectRegex": []
   },
