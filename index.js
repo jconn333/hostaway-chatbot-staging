@@ -332,13 +332,13 @@ function policyAnswerFromHouseRules(safe, intent) {
 function policyAnswerFromFacts(safe, intent) {
   if (intent === "checkin") {
     if (safe?.checkInStart || safe?.checkInEnd) {
-      const ci = [safe.checkInStart, safe.checkInEnd].filter(Boolean).join("–");
+      const ci = formatCheckInRange(safe.checkInStart, safe.checkInEnd);
       return `Check‑in is ${ci || "available during the standard window for this unit"}.`;
     }
   }
   if (intent === "checkout") {
     if (safe?.checkOut) {
-      return `Check‑out is ${safe.checkOut}.`;
+      return `Check‑out is ${formatTime12(safe.checkOut) || safe.checkOut}.`;
     }
   }
   return null;
@@ -380,8 +380,8 @@ function buildSafeSummary(safe) {
   if (safe.beds != null) facts.push(`${safe.beds} beds`);
   if (facts.length) parts.push(`\nAt‑a‑glance: ${facts.join(", ")}.`);
   if (safe.checkInStart || safe.checkInEnd || safe.checkOut) {
-    const ci = [safe.checkInStart, safe.checkInEnd].filter(Boolean).join("–");
-    const co = safe.checkOut ? `Check‑out ${safe.checkOut}` : "";
+    const ci = formatCheckInRange(safe.checkInStart, safe.checkInEnd);
+    const co = safe.checkOut ? `Check‑out ${formatTime12(safe.checkOut) || safe.checkOut}` : "";
     parts.push(`Check‑in ${ci || "time varies"}${co ? `, ${co}` : ""}.`);
   }
   if (safe.minNights != null) parts.push(`Minimum stay: ${safe.minNights} nights.`);
@@ -411,10 +411,45 @@ function formatAmenityList(amenities, limit = 8) {
 }
 
 function formatCheckTimes(safe) {
-  const ci = [safe.checkInStart, safe.checkInEnd].filter(Boolean).join("–");
-  const co = safe.checkOut ? `Check‑out ${safe.checkOut}` : "";
+  const ci = formatCheckInRange(safe.checkInStart, safe.checkInEnd);
+  const co = safe.checkOut ? `Check‑out ${formatTime12(safe.checkOut) || safe.checkOut}` : "";
   if (!ci && !co) return "";
   return `Check‑in ${ci || "time varies"}${co ? `, ${co}` : ""}.`;
+}
+
+function formatCheckInRange(start, end) {
+  const s = formatTime12(start);
+  const e = formatTime12(end);
+  return [s, e].filter(Boolean).join("–");
+}
+
+function formatTime12(value) {
+  if (value == null || value === "") return null;
+  const raw = String(value).trim();
+  let h = null;
+  let m = 0;
+
+  if (/^\d{1,2}$/.test(raw)) {
+    h = Number(raw);
+  } else if (/^\d{3,4}$/.test(raw)) {
+    const padded = raw.padStart(4, "0");
+    h = Number(padded.slice(0, 2));
+    m = Number(padded.slice(2, 4));
+  } else if (/^\d{1,2}:\d{2}$/.test(raw)) {
+    const [hh, mm] = raw.split(":");
+    h = Number(hh);
+    m = Number(mm);
+  } else {
+    return raw;
+  }
+
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return raw;
+  if (h < 0 || h > 23 || m < 0 || m > 59) return raw;
+
+  const suffix = h >= 12 ? "pm" : "am";
+  const hour12 = h % 12 === 0 ? 12 : h % 12;
+  const minute = String(m).padStart(2, "0");
+  return `${hour12}:${minute} ${suffix}`;
 }
 
 function detectUnitType(message) {

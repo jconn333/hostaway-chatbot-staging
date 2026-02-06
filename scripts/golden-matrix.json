@@ -41,7 +41,7 @@
     "message": "What time is check-in for {{unit_name}}?",
     "expectIncludes": [],
     "expectRegex": ["Check.?in"],
-    "expectOneOfIncludes": ["15", "21", "Book now:"],
+    "expectOneOfIncludes": ["am", "pm", "Book now:"],
     "units": [
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
