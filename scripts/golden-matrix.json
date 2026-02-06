@@ -10,7 +10,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -24,7 +28,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -38,7 +46,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -52,7 +64,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -66,7 +82,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -80,7 +100,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   },
   {
@@ -94,7 +118,11 @@
       { "slug": "joy", "unit_name": "Joy Lodge Suite" },
       { "slug": "grace", "unit_name": "Grace Lodge Suite" },
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
+      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
+      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
+      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
+      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
     ]
   }
 ]
