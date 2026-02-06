@@ -46,7 +46,8 @@ const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 const INVENTORY_AVAILABILITY_CONCURRENCY = 5;
 const INVENTORY_AVAILABILITY_MAX = 20;
-const INTENT_MODEL = "gpt-4o-mini";
+const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-5-mini";
+const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-5-mini";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, updatedAt }
@@ -1886,7 +1887,7 @@ app.post("/chat", async (req, res) => {
     let aiText = "";
     try {
       const aiResponse = await client.responses.create({
-        model: INTENT_MODEL,
+        model: ANSWER_MODEL,
         instructions:
           "You are a customer service assistant for AmishCountryLodging.com. " +
           "Write in a warm, conversational tone. " +
