@@ -54,5 +54,47 @@
       { "slug": "redfern", "unit_name": "Red Fern Cabin" },
       { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
     ]
+  },
+  {
+    "name": "matrix-availability-two-nights",
+    "sessionId": "golden-matrix-availability-two-nights",
+    "message": "Is {{unit_name}} available April 1 for two nights?",
+    "expectIncludes": ["2026-04-01", "Book now:"],
+    "expectRegex": [],
+    "expectOneOfIncludes": [],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  },
+  {
+    "name": "matrix-availability-range",
+    "sessionId": "golden-matrix-availability-range",
+    "message": "Can I book {{unit_name}} from April 3 to April 5?",
+    "expectIncludes": ["2026-04-03", "2026-04-05", "Book now:"],
+    "expectRegex": [],
+    "expectOneOfIncludes": [],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
+  },
+  {
+    "name": "matrix-availability-endash",
+    "sessionId": "golden-matrix-availability-endash",
+    "message": "Need {{unit_name}} Apr 7–Apr 9. Is it open?",
+    "expectIncludes": ["2026-04-07", "2026-04-09", "Book now:"],
+    "expectRegex": [],
+    "expectOneOfIncludes": [],
+    "units": [
+      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
+      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
+      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
+      { "slug": "waterlily", "unit_name": "Water Lily Cabin" }
+    ]
   }
 ]
