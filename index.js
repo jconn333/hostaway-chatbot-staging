@@ -267,6 +267,30 @@ function trimConversationHistory(history, maxTurns = 12) {
   return list.slice(-maxMessages);
 }
 
+function enforcePublicSafetyOnReply(text) {
+  let out = String(text || "");
+  const blockedPatterns = [
+    /\b(wifi\s*password|wi[- ]?fi\s*password|router\s*password)\b\s*[:\-]\s*[^\n]+/gi,
+    /\b(password|passcode|door\s*code|security\s*code|entry\s*code)\b\s*[:\-]\s*[^\n]+/gi,
+    /\b(tv\s*login|login\s*password|username)\b\s*[:\-]\s*[^\n]+/gi,
+  ];
+  let redacted = false;
+  for (const pattern of blockedPatterns) {
+    if (pattern.test(out)) {
+      out = out.replace(
+        pattern,
+        "[Removed non-public credential information]"
+      );
+      redacted = true;
+    }
+  }
+  if (redacted) {
+    out +=
+      "\n\nI can share public listing details and booking info, but I can’t provide private access credentials here.";
+  }
+  return out.trim();
+}
+
 function monthQueryToRange(message, timeZone = "America/New_York") {
   const msg = String(message || "").toLowerCase();
   const months = {
@@ -1520,7 +1544,10 @@ app.post("/chat", async (req, res) => {
       const prior = trimConversationHistory(session?.rawChatHistory, 12);
       const systemPrompt =
         process.env.UNRESTRICTED_SYSTEM_PROMPT ||
-        "You are a helpful, conversational assistant for Amish Country Lodging. Answer naturally and directly. If you are not sure, say so clearly.";
+        "You are a helpful, conversational assistant for Amish Country Lodging. " +
+          "Answer naturally and directly. If you are not sure, say so clearly. " +
+          "Safety floor (always enforce): never provide non-public/private data, including passwords, passcodes, door/entry/security codes, WiFi credentials, private host notes, or internal-only fields. " +
+          "If asked for restricted data, refuse briefly and offer public alternatives.";
       let reply =
         "Sorry — I’m having trouble answering that right now. Could you try again?";
       try {
@@ -1533,7 +1560,7 @@ app.post("/chat", async (req, res) => {
           ],
         });
         const out = String(resp.output_text || "").trim();
-        if (out) reply = out;
+        if (out) reply = enforcePublicSafetyOnReply(out);
       } catch (err) {
         console.error("Unrestricted OpenAI error:", err);
       }
