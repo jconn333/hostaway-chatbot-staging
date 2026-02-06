@@ -2,8 +2,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import OpenAI from "openai";
-import pkg from "pg";
-import { getSandboxHtml, getReviewHtml } from "./src/ui.js";
+import { getSandboxHtml } from "./src/ui.js";
 import {
   isAvailabilityQuestion,
   isInventoryAvailabilityQuestion,
@@ -34,8 +33,6 @@ import {
   hasAmenity,
 } from "./src/lib/inventory.js";
 import { fetchListingByIdCached } from "./src/lib/hostaway.js";
-
-const { Pool } = pkg;
 
 dotenv.config();
 
@@ -722,18 +719,13 @@ function buildComparison(primarySafe, secondarySafe, message = "") {
   return lines.join("\n");
 }
 
-const db = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
-
 /* ===============================
    ROUTES
 ================================ */
 
-// Health check
 app.get("/", (req, res) => {
-  res.send("Chatbot server is running 🚀");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(getSandboxHtml());
 });
 
 app.get("/healthz", (req, res) => {
@@ -778,17 +770,8 @@ app.get("/analytics/summary", (req, res) => {
   });
 });
 
-/* ---------- SANDBOX UI ---------- */
 app.get("/sandbox", (req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(getSandboxHtml());
-});
-
-/* ---------- REVIEW UI ---------- */
-
-app.get("/review", (req, res) => {
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(getReviewHtml());
+  res.redirect(302, "/");
 });
 
 app.use("/hostaway", createHostawayRouter());
@@ -1804,134 +1787,6 @@ app.post("/chat", async (req, res) => {
     metrics.errors_total += 1;
     logEvent("error", { message: String(err?.message || err) });
     res.status(500).json({ reply: "Something went wrong on the server." });
-  }
-});
-
-/* ---------- FEEDBACK (thumbs-only; no numeric rating) ---------- */
-app.post("/feedback", async (req, res) => {
-  try {
-    const { testerName, pageUrl, listingId, userMessage, botReply, thumbs, feedback } = req.body;
-
-    if (!userMessage || !botReply) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing userMessage or botReply",
-      });
-    }
-
-    await db.query(
-      `
-      insert into chat_feedback
-        (tester_name, page_url, listing_id, user_message, bot_reply, rating, thumbs, feedback)
-      values
-        ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [
-        testerName || null,
-        pageUrl || null,
-        listingId || null,
-        userMessage,
-        botReply,
-        null, // rating (thumbs-only)
-        thumbs || null,
-        feedback || null,
-      ]
-    ).catch(async (err) => {
-      // Backward compatibility if the "rating" column was removed.
-      if (err?.code === "42703") {
-        await db.query(
-          `
-          insert into chat_feedback
-            (tester_name, page_url, listing_id, user_message, bot_reply, thumbs, feedback)
-          values
-            ($1, $2, $3, $4, $5, $6, $7)
-          `,
-          [
-            testerName || null,
-            pageUrl || null,
-            listingId || null,
-            userMessage,
-            botReply,
-            thumbs || null,
-            feedback || null,
-          ]
-        );
-        return;
-      }
-      throw err;
-    });
-
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Feedback error:", err);
-    res.status(500).json({ ok: false, error: "Failed to save feedback" });
-  }
-});
-
-/* ---------- FEEDBACK (RECENT) ---------- */
-/**
- * Example:
- *   /feedback/recent
- *   /feedback/recent?limit=50
- *   /feedback/recent?limit=50&thumbs=up
- *   /feedback/recent?listingId=214120
- *   /feedback/recent?tester=Jeff
- */
-app.get("/feedback/recent", async (req, res) => {
-  try {
-    const limitRaw = Number(req.query.limit || 50);
-    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 50;
-
-    const thumbs = (req.query.thumbs || "").toString().trim().toLowerCase(); // "up" or "down" or ""
-    const listingIdRaw = (req.query.listingId || "").toString().trim();
-    const tester = (req.query.tester || "").toString().trim();
-
-    const where = [];
-    const params = [];
-    let i = 1;
-
-    if (thumbs === "up" || thumbs === "down") {
-      where.push(`thumbs = $${i++}`);
-      params.push(thumbs);
-    }
-
-    if (listingIdRaw && !Number.isNaN(Number(listingIdRaw))) {
-      where.push(`listing_id = $${i++}`);
-      params.push(Number(listingIdRaw));
-    }
-
-    if (tester) {
-      where.push(`tester_name ILIKE $${i++}`);
-      params.push(`%${tester}%`);
-    }
-
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-
-    // NOTE: This query works whether or not you still have a "rating" column.
-    const sql = `
-      SELECT
-        id,
-        created_at,
-        tester_name,
-        page_url,
-        listing_id,
-        user_message,
-        bot_reply,
-        thumbs,
-        feedback
-      FROM chat_feedback
-      ${whereSql}
-      ORDER BY created_at DESC
-      LIMIT $${i++}
-    `;
-
-    params.push(limit);
-
-    const result = await db.query(sql, params);
-    res.json({ ok: true, rows: result.rows });
-  } catch (err) {
-    console.error("Recent feedback error:", err);
-    res.status(500).json({ ok: false, error: "Failed to load feedback" });
   }
 });
 

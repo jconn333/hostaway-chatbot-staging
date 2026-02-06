@@ -39,12 +39,6 @@ post_chat() {
     -d "$payload"
 }
 
-post_feedback() {
-  curl -sS -f -X POST "$BASE_URL/feedback" \
-    -H "Content-Type: application/json" \
-    -d "$1"
-}
-
 # Extract .reply from JSON response (no jq required)
 json_get_reply() {
   node -e '
@@ -64,25 +58,19 @@ assert_contains() {
   echo "$hay" | grep -qi -- "$needle" || fail "Expected to contain: $needle"
 }
 
-echo "1) Health check"
-health="$(http_get "$BASE_URL/")"
-assert_contains "$health" "Chatbot server is running"
-pass "Health check ok"
+echo "1) Root UI loads"
+headers="$(http_head "$BASE_URL/")"
+echo "$headers" | grep -qi "200" || fail "Root UI did not return 200"
+pass "Root UI returns 200"
 echo
 
-echo "2) Sandbox UI loads"
+echo "2) Sandbox route redirects to root"
 headers="$(http_head "$BASE_URL/sandbox")"
-echo "$headers" | grep -qi "200" || fail "Sandbox did not return 200"
-pass "Sandbox returns 200"
+echo "$headers" | grep -Eq "302|301" || fail "Sandbox did not redirect"
+pass "Sandbox redirect works"
 echo
 
-echo "3) Review UI loads"
-headers="$(http_head "$BASE_URL/review")"
-echo "$headers" | grep -qi "200" || fail "Review did not return 200"
-pass "Review returns 200"
-echo
-
-echo "4) Hostaway token test (must return ok:true)"
+echo "3) Hostaway token test (must return ok:true)"
 token_json="$(http_get "$BASE_URL/hostaway/test")"
 echo "$token_json" | node -e '
   const s = require("fs").readFileSync(0,"utf8");
@@ -92,7 +80,7 @@ echo "$token_json" | node -e '
 pass "Hostaway token ok:true"
 echo
 
-echo "5) Availability: Red Fern tonight (expects available OR not available, but must mention Red Fern dates line)"
+echo "4) Availability: Red Fern tonight (expects available OR not available, but must mention Red Fern dates line)"
 resp="$(post_chat "Is the Red Fern Cabin available tonight?")"
 reply="$(echo "$resp" | json_get_reply)"
 # Strict-ish expectations: must mention "Red Fern" OR "this unit" + dates format YYYY-MM-DD
@@ -101,7 +89,7 @@ assert_contains "$reply" "Book now:"
 pass "Red Fern tonight returns dates + booking link"
 echo
 
-echo "6) Availability: explicit range"
+echo "5) Availability: explicit range"
 resp="$(post_chat "Is the Joy Suite available from 2026-03-24 to 2026-03-26?")"
 reply="$(echo "$resp" | json_get_reply)"
 assert_contains "$reply" "2026-03-24"
@@ -110,7 +98,7 @@ assert_contains "$reply" "Book now:"
 pass "Explicit range returns expected dates + booking link"
 echo
 
-echo "7) Session debug (expects session state present)"
+echo "6) Session debug (expects session state present)"
 session_json="$(http_get "$BASE_URL/session/debug?sessionId=$SESSION_ID")"
 echo "$session_json" | node -e '
   const s=require("fs").readFileSync(0,"utf8");
@@ -121,14 +109,14 @@ echo "$session_json" | node -e '
 pass "Session debug ok:true with listingId"
 echo
 
-echo "8) General Q&A: pet policy (must not crash; must respond non-empty)"
+echo "7) General Q&A: pet policy (must not crash; must respond non-empty)"
 resp="$(post_chat "Does the Red Fern Cabin allow pets?")"
 reply="$(echo "$resp" | json_get_reply)"
 [ "${#reply}" -ge 10 ] || fail "Reply too short: $reply"
 pass "Pet policy produced a non-trivial reply"
 echo
 
-echo "9) Collection query: hot tubs (expects list-like content)"
+echo "8) Collection query: hot tubs (expects list-like content)"
 resp="$(post_chat "Which units have hot tubs?")"
 reply="$(echo "$resp" | json_get_reply)"
 # Expect it to mention hot tub(s) and at least one bullet-ish marker
@@ -137,7 +125,7 @@ echo "$reply" | grep -Eq '•|- ' || fail "Expected bullet list in hot tub reply
 pass "Hot tub collection query returns list"
 echo
 
-echo "10) Follow-up amenity (expects same list on 'What about that?')"
+echo "9) Follow-up amenity (expects same list on 'What about that?')"
 resp="$(post_chat "What about that?")"
 reply="$(echo "$resp" | json_get_reply)"
 assert_contains "$reply" "hot"
@@ -145,7 +133,7 @@ echo "$reply" | grep -Eq '•|- ' || fail "Expected bullet list in follow-up rep
 pass "Amenity follow-up reuses last amenity"
 echo
 
-echo "11) Policy follow-up (pets list after general policy)"
+echo "10) Policy follow-up (pets list after general policy)"
 resp="$(post_chat "Are pets allowed?")"
 reply="$(echo "$resp" | json_get_reply)"
 assert_contains "$reply" "pets"
@@ -155,48 +143,18 @@ echo "$reply" | grep -Eq '•|- ' || fail "Expected bullet list in pet-friendly 
 pass "Policy follow-up returns pet-friendly list"
 echo
 
-echo "12) Summary tone includes follow-up question"
+echo "11) Summary tone includes follow-up question"
 resp="$(post_chat "Tell me about Red Fern Cabin")"
 reply="$(echo "$resp" | json_get_reply)"
 assert_contains "$reply" "Would you like me to check availability"
 pass "Summary includes conversational follow-up"
 echo
 
-echo "13) Unknown unit -> should ask for clarification"
+echo "12) Unknown unit -> should ask for clarification"
 resp="$(post_chat "Is the cabin available tonight?")"
 reply="$(echo "$resp" | json_get_reply)"
 assert_contains "$reply" "Which unit"
 pass "Unknown unit triggers clarification"
-echo
-
-echo "14) Feedback write (expects ok:true)"
-payload='{
-  "testerName":"Jeff",
-  "pageUrl":"terminal",
-  "listingId":214124,
-  "userMessage":"terminal smoke test",
-  "botReply":"terminal smoke test reply",
-  "thumbs":"up",
-  "feedback":"terminal smoke test"
-}'
-fb="$(post_feedback "$payload")"
-echo "$fb" | node -e '
-  const s=require("fs").readFileSync(0,"utf8");
-  let j; try{j=JSON.parse(s)}catch(e){console.error(s);process.exit(2)}
-  if(!j.ok) process.exit(3);
-' || fail "Feedback did not return ok:true"
-pass "Feedback write ok:true"
-echo
-
-echo "15) Feedback recent (expects ok:true and rows array)"
-recent="$(http_get "$BASE_URL/feedback/recent?limit=5")"
-echo "$recent" | node -e '
-  const s=require("fs").readFileSync(0,"utf8");
-  let j; try{j=JSON.parse(s)}catch(e){console.error(s);process.exit(2)}
-  if(!j.ok) process.exit(3);
-  if(!Array.isArray(j.rows)) process.exit(4);
-' || fail "Feedback recent did not return ok:true with rows[]"
-pass "Feedback recent ok:true with rows[]"
 echo
 
 echo "✅ STRICT terminal smoke sequence complete."
