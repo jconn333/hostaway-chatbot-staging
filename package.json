@@ -19,7 +19,8 @@
     "golden:fuzz": "node scripts/golden-fuzz.js",
     "golden:bug:add": "node scripts/golden-bug-add.js",
     "golden:oracle": "node scripts/golden-oracle.js",
-    "monitor:synthetic": "node scripts/synthetic-monitor.js"
+    "monitor:synthetic": "node scripts/synthetic-monitor.js",
+    "qa:run": "node scripts/qa-run.js"
   },
   "keywords": [],
   "author": "",
