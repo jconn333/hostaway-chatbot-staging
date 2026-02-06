@@ -629,6 +629,37 @@ function policyAnswerFromFacts(safe, intent) {
   return null;
 }
 
+function capacityAnswerFromFacts(safe, message) {
+  const msg = (message || "").toLowerCase();
+  const unitName = safe?.name || "This unit";
+
+  if (
+    /\bhow many\b.*\b(people|guests?|persons?)\b/.test(msg) ||
+    /\b(people|guests?|persons?)\b.*\b(sleep|sleeps)\b/.test(msg) ||
+    /\bsleeps?\b/.test(msg)
+  ) {
+    if (safe?.sleeps != null) return `${unitName} sleeps ${safe.sleeps} guests.`;
+    return `I don’t have a confirmed guest capacity for ${unitName}.`;
+  }
+
+  if (/\bhow many\b.*\bbedrooms?\b|\bbedrooms?\b/.test(msg)) {
+    if (safe?.bedrooms != null) return `${unitName} has ${safe.bedrooms} bedrooms.`;
+    return `I don’t have a confirmed bedroom count for ${unitName}.`;
+  }
+
+  if (/\bhow many\b.*\bbathrooms?\b|\bbathrooms?\b/.test(msg)) {
+    if (safe?.bathrooms != null) return `${unitName} has ${safe.bathrooms} bathrooms.`;
+    return `I don’t have a confirmed bathroom count for ${unitName}.`;
+  }
+
+  if (/\bhow many\b.*\bbeds?\b|\bbeds?\b/.test(msg)) {
+    if (safe?.beds != null) return `${unitName} has ${safe.beds} beds.`;
+    return `I don’t have a confirmed bed count for ${unitName}.`;
+  }
+
+  return null;
+}
+
 async function mapWithConcurrency(items, limit, mapper) {
   const results = new Array(items.length);
   let idx = 0;
@@ -757,6 +788,20 @@ function formatTime12(value) {
   const hour12 = h % 12 === 0 ? 12 : h % 12;
   const minute = String(m).padStart(2, "0");
   return `${hour12}:${minute} ${suffix}`;
+}
+
+function safeFactsForModel(safe) {
+  if (!safe || typeof safe !== "object") return safe;
+  const checkInWindow = formatCheckInRange(safe.checkInStart, safe.checkInEnd);
+  const checkOut12 = formatTime12(safe.checkOut);
+  return {
+    ...safe,
+    // Keep only human-friendly time fields for model responses.
+    checkIn: checkInWindow || null,
+    checkOut: checkOut12 || null,
+    checkInStart: undefined,
+    checkInEnd: undefined,
+  };
 }
 
 function detectUnitType(message) {
@@ -1289,6 +1334,55 @@ app.post("/chat", async (req, res) => {
     // ---------- INVENTORY-WIDE CAPACITY QUESTIONS ----------
     if (inventoryIntent) {
       if (capacityQuery) {
+        // Capacity queries should respect current and follow-up inventory filters.
+        const hasFollowupInventoryContext =
+          looksLikeFollowupQuestion(userMessage) && Boolean(followupInventory);
+        let capacityAmenityKeys = detectAmenityKeys(normalizedMessage);
+        let capacityUnitType = detectUnitType(normalizedMessage);
+        let capacityWantsPetFriendly = detectPetFriendlyFilter(normalizedMessage);
+        const hasAtLeastLanguage = /\b(at least|minimum|min\.?|or more|no fewer than)\b/i.test(
+          normalizedMessage
+        );
+        const hasAtMostLanguage = /\b(at most|maximum|max\.?|or less|no more than)\b/i.test(
+          normalizedMessage
+        );
+        const exactBedrooms =
+          Number.isFinite(capacityQuery.bedrooms) &&
+          !hasAtLeastLanguage &&
+          !hasAtMostLanguage &&
+          new RegExp(
+            `\\b(?:have|has|with|exactly|also have|also has)\\s*${capacityQuery.bedrooms}\\s*bedrooms?\\b`,
+            "i"
+          ).test(normalizedMessage);
+        const exactBathrooms =
+          Number.isFinite(capacityQuery.bathrooms) &&
+          !hasAtLeastLanguage &&
+          !hasAtMostLanguage &&
+          new RegExp(
+            `\\b(?:have|has|with|exactly|also have|also has)\\s*${capacityQuery.bathrooms}\\s*bathrooms?\\b`,
+            "i"
+          ).test(normalizedMessage);
+        const exactBeds =
+          Number.isFinite(capacityQuery.beds) &&
+          !hasAtLeastLanguage &&
+          !hasAtMostLanguage &&
+          new RegExp(
+            `\\b(?:have|has|with|exactly|also have|also has)\\s*${capacityQuery.beds}\\s*beds?\\b`,
+            "i"
+          ).test(normalizedMessage);
+
+        if (hasFollowupInventoryContext && followupInventory?.type === "amenity") {
+          if (!capacityAmenityKeys.length && Array.isArray(followupInventory.amenityKeys)) {
+            capacityAmenityKeys = followupInventory.amenityKeys;
+          }
+          if (!capacityUnitType && followupInventory.unitType) {
+            capacityUnitType = followupInventory.unitType;
+          }
+          if (!capacityWantsPetFriendly && followupInventory.petFriendly) {
+            capacityWantsPetFriendly = true;
+          }
+        }
+
         const results = await mapWithConcurrency(
           listings,
           INVENTORY_AVAILABILITY_CONCURRENCY,
@@ -1296,11 +1390,34 @@ app.post("/chat", async (req, res) => {
             try {
               const listing = await fetchListingByIdCached(l.id, accessToken);
               const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+              const matchesAmenities =
+                capacityAmenityKeys.length === 0 ||
+                capacityAmenityKeys.every((k) => hasAmenity(safe, k));
+              const matchesUnitType =
+                !capacityUnitType ||
+                String(safe.name || "").toLowerCase().includes(capacityUnitType);
+              const matchesPetPolicy =
+                !capacityWantsPetFriendly || petPolicyFromRules(safe) === "allowed";
               const ok =
                 (capacityQuery.sleeps ? safe.sleeps >= capacityQuery.sleeps : true) &&
-                (capacityQuery.bedrooms ? safe.bedrooms >= capacityQuery.bedrooms : true) &&
-                (capacityQuery.bathrooms ? safe.bathrooms >= capacityQuery.bathrooms : true) &&
-                (capacityQuery.beds ? safe.beds >= capacityQuery.beds : true);
+                (capacityQuery.bedrooms
+                  ? exactBedrooms
+                    ? safe.bedrooms === capacityQuery.bedrooms
+                    : safe.bedrooms >= capacityQuery.bedrooms
+                  : true) &&
+                (capacityQuery.bathrooms
+                  ? exactBathrooms
+                    ? safe.bathrooms === capacityQuery.bathrooms
+                    : safe.bathrooms >= capacityQuery.bathrooms
+                  : true) &&
+                (capacityQuery.beds
+                  ? exactBeds
+                    ? safe.beds === capacityQuery.beds
+                    : safe.beds >= capacityQuery.beds
+                  : true) &&
+                matchesAmenities &&
+                matchesUnitType &&
+                matchesPetPolicy;
               if (ok) {
                 return `• [${safe.name}](${safe.bookingUrl}) — Sleeps ${safe.sleeps}, ${safe.bedrooms} bd`;
               }
@@ -1315,6 +1432,14 @@ app.post("/chat", async (req, res) => {
         if (lines.length === 0) {
           return respond("I didn’t find any units that match that capacity.");
         }
+        setSession(sessionId, {
+          lastInventory: {
+            type: "amenity",
+            amenityKeys: capacityAmenityKeys,
+            unitType: capacityUnitType,
+            petFriendly: capacityWantsPetFriendly,
+          },
+        });
         return respond(`Units that match your request:\n\n${lines.join("\n")}`);
       }
     }
@@ -1421,6 +1546,20 @@ app.post("/chat", async (req, res) => {
       }
     }
     setDebugHeader("ListingId", listingId);
+
+    // Follow-up date-shift asks should stay on the active unit unless user asks inventory-wide.
+    if (
+      !listingId &&
+      session?.listingId &&
+      looksLikeFollowupQuestion(userMessage) &&
+      isAvailabilityQuestion(normalizedMessage) &&
+      !isInventoryAvailabilityQuestion(normalizedMessage)
+    ) {
+      listingId = session.listingId;
+      memoryNote = "\n\n(Using your last unit from this session.)";
+      setDebugHeader("ListingId", listingId);
+      setDebugHeader("ListingFollowupPin", "session");
+    }
 
     // ---------- INVENTORY-WIDE AVAILABILITY QUESTIONS ----------
     const hasAmenityFollowupSignal =
@@ -1944,6 +2083,13 @@ app.post("/chat", async (req, res) => {
           memoryNote
       );
     }
+
+    if (listingId && !dates && isAvailabilityQuestion(normalizedMessage)) {
+      return respond(
+        "Which dates should I check for availability? For example: “today”, “this weekend”, or “2026-03-24 to 2026-03-26”." +
+          memoryNote
+      );
+    }
     if (
       dates &&
       (isAvailabilityQuestion(normalizedMessage) ||
@@ -2039,13 +2185,25 @@ app.post("/chat", async (req, res) => {
     // General Q&A: Fetch listing and build safe facts
     const listing = await fetchListingById(listingId, accessToken);
     const safe = toSafeListingFacts(listing, { audience: "postbooking" });
-    const safeFactsText = JSON.stringify(safe, null, 2);
+    const safeFactsText = JSON.stringify(safeFactsForModel(safe), null, 2);
 
     const wantsBookingLink =
       isAvailabilityQuestion(normalizedMessage) ||
       /\b(book|booking|reserve|reservation|availability|available|check[- ]?in|check[- ]?out|checkout|checkin)\b/i.test(
         normalizedMessage
       );
+
+    if (capacityFactQuestion) {
+      const capacityReply = capacityAnswerFromFacts(safe, normalizedMessage);
+      if (capacityReply) {
+        return respond(
+          appendFollowupIfMissing(
+            capacityReply + memoryNote,
+            "Want me to check availability or other unit details?"
+          )
+        );
+      }
+    }
 
     let policyIntent = detectPolicyIntent(normalizedMessage);
     if (!policyIntent && looksLikeFollowupQuestion(normalizedMessage) && session?.lastPolicyIntent) {

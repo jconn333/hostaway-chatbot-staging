@@ -364,6 +364,13 @@ export function extractDates(message, timeZone = "America/New_York") {
     dates = { start, end };
   }
 
+  // Treat plain "today" as a same-day check-in for 1 night.
+  if (!dates && /\btoday\b/.test(msg)) {
+    const start = isoDateInTimeZoneDaysFromNow(timeZone, 0);
+    const end = isoDateInTimeZoneDaysFromNow(timeZone, 1);
+    dates = { start, end };
+  }
+
   // IMPORTANT: check "day after tomorrow" BEFORE "tomorrow"
   if (!dates && msg.includes("day after tomorrow")) {
     const start = isoDateInTimeZoneDaysFromNow(timeZone, 2);
