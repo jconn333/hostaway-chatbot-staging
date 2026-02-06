@@ -34,8 +34,6 @@ import {
   detectAmenityQuery,
   detectAmenityKeys,
   detectAmenityKeyLoose,
-  canonicalAmenityKey,
-  normalizeAmenityTerm,
   hasAmenity,
 } from "./src/lib/inventory.js";
 
@@ -366,40 +364,13 @@ function extractRememberedRequirements(message) {
   return null;
 }
 
-function isRememberOnlyCaptureRequest(message) {
-  const raw = String(message || "").trim();
-  if (!raw) return false;
-  if (!/^remember\b|^save this\b|^note this\b|^keep this\b/i.test(raw)) return false;
-  const msg = raw.toLowerCase();
-  // If user is explicitly asking for options/ranking now, don't short-circuit.
-  if (
-    /\b(which|what|show|list|recommend|suggest|top|pick|choose|best options?|best units?)\b/.test(
-      msg
-    )
-  ) {
-    return false;
-  }
-  return true;
-}
-
 function parseConstraintSignals(message) {
   const msg = String(message || "").toLowerCase();
   const capacity = extractCapacityQuery(message);
   const dates = extractDates(message);
-  const explicitRemember =
-    /\bremember this\b|\bsave this\b|\bnote this\b|\bkeep this\b/.test(msg);
-  const rememberedText = extractRememberedRequirements(message);
-  const rememberMode = explicitRemember || Boolean(rememberedText);
-
-  const amenityKeys = detectAmenityKeys(msg, { forceBroad: rememberMode });
-  const explicitAmenity = detectAmenityQuery(msg, { forceBroad: rememberMode });
+  const amenityKeys = detectAmenityKeys(msg);
+  const explicitAmenity = detectAmenityQuery(msg);
   if (explicitAmenity && !amenityKeys.includes(explicitAmenity)) amenityKeys.push(explicitAmenity);
-  if (rememberedText) {
-    const rememberedAmenityKeys = detectAmenityKeys(rememberedText, { forceBroad: true });
-    for (const key of rememberedAmenityKeys) {
-      if (!amenityKeys.includes(key)) amenityKeys.push(key);
-    }
-  }
 
   const priorities = {
     wifi: /\b(wifi|wi[- ]?fi|internet)\b/.test(msg),
@@ -409,6 +380,10 @@ function parseConstraintSignals(message) {
     solo: /\bsolo\b/.test(msg),
     lastMinute: /\blast[- ]?minute|tonight|tomorrow\b/.test(msg),
   };
+
+  const explicitRemember =
+    /\bremember this\b|\bsave this\b|\bnote this\b|\bkeep this\b/.test(msg);
+  const rememberedText = extractRememberedRequirements(message);
 
   const data = {
     capacity: capacity || null,
@@ -499,25 +474,8 @@ function buildConstraintFilterMeta(constraints) {
 
 function detectRecommendationIntent(message) {
   const msg = (message || "").toLowerCase();
-  const hasTopOptions =
-    /\btop\s+\d+\s+options?\b/.test(msg) ||
-    /\btop\s+(one|two|three|four|five)\s+options?\b/.test(msg) ||
-    /\btop\s+options?\b/.test(msg) ||
-    /\btop choices?\b/.test(msg);
-  const hasPickOne =
-    /\b(pick|choose)\s+(one|1)\b/.test(msg) ||
-    /\bwhat would you choose\b/.test(msg) ||
-    /\bif you had to pick\b/.test(msg);
-  const hasRecommendationWords =
-    /\b(recommend|suggest|best option|best unit|which should i|help me choose|help me book|find me)\b/.test(
-      msg
-    );
-  const hasOccasion = /\b(anniversary|romantic|getaway|trip)\b/.test(msg);
-  return (
-    hasTopOptions ||
-    hasPickOne ||
-    hasRecommendationWords ||
-    (hasOccasion && /\b(best|pick|choose|option)\b/.test(msg))
+  return /\b(recommend|suggest|best option|best unit|which should i|help me choose|help me book|find me|top choices?|top \d+ options?)\b/.test(
+    msg
   );
 }
 
@@ -530,7 +488,6 @@ function isDirectBookingRequest(message) {
 
 function isInventoryQuery(message) {
   const msg = (message || "").toLowerCase();
-  if (detectInventoryDateSuggestionRequest(msg)) return true;
   const hasListWords = /\b(which|what|any|show|list)\b/.test(msg);
   const hasUnitWords = /\b(units|cabins|suites|lodges|places|properties|rentals|listings)\b/.test(
     msg
@@ -539,64 +496,6 @@ function isInventoryQuery(message) {
     msg
   );
   return hasListWords && (hasUnitWords || hasFeatureWords);
-}
-
-function detectInventoryDateSuggestionRequest(message) {
-  const msg = String(message || "").toLowerCase();
-  return (
-    /\b(check[- ]?in|checkout|check[- ]?out)\b.*\b(range|ranges|window|windows|options)\b/.test(msg) ||
-    /\b(next|soonest|earliest)\b.*\b(range|ranges|window|windows|dates?|options)\b/.test(msg) ||
-    /\bwhat\b.*\bdates?\b.*\b(consider|suggest|recommend)\b/.test(msg)
-  );
-}
-
-function extractRequestedNights(message, fallback = 2) {
-  const msg = String(message || "").toLowerCase();
-  const m = msg.match(/\b([1-5])\s*(night|nights)\b/);
-  if (!m) return fallback;
-  const n = Number(m[1]);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(1, Math.min(5, n));
-}
-
-function toCalendarDayMap(days = []) {
-  const map = new Map();
-  for (const d of days || []) {
-    const key = String(d?.date || "");
-    if (!key) continue;
-    map.set(key, d);
-  }
-  return map;
-}
-
-function isWindowAvailable(dayMap, start, nights) {
-  for (let i = 0; i < nights; i++) {
-    const date = addDays(start, i);
-    const d = dayMap.get(date);
-    if (!d || !d.isAvailable) return false;
-  }
-  return true;
-}
-
-function findInventoryRangeSuggestions(calendarsByListing, start, horizonDays, nights = 2, maxResults = 2) {
-  const suggestions = [];
-  const limitStart = addDays(start, Math.max(0, horizonDays - nights));
-  for (let cursor = start; cursor <= limitStart; cursor = addDays(cursor, 1)) {
-    let availableCount = 0;
-    for (const dayMap of calendarsByListing.values()) {
-      if (isWindowAvailable(dayMap, cursor, nights)) availableCount += 1;
-    }
-    if (availableCount > 0) {
-      suggestions.push({
-        start: cursor,
-        end: addDays(cursor, nights),
-        nights,
-        availableCount,
-      });
-      if (suggestions.length >= maxResults) break;
-    }
-  }
-  return suggestions;
 }
 
 function isCapacityFactQuestion(message) {
@@ -641,7 +540,6 @@ async function classifyIntent(message) {
 }
 
 function heuristicIntent(message, policyIntent = null) {
-  if (detectInventoryDateSuggestionRequest(message)) return "inventory_availability";
   if (isInventoryAvailabilityQuestion(message)) return "inventory_availability";
   if (isAvailabilityQuestion(message)) return "availability";
   if (detectAmenityQuery(message) || isInventoryQuery(message)) return "amenity_inventory";
@@ -1248,14 +1146,14 @@ function scoreRecommendation(safe, { capacity, amenityKeys, wantsPetFriendly, un
   return score;
 }
 
-function looksLikeAmenityFilter(message) {
+function looksLikeAmenityFilterWithoutSupportedAmenity(message) {
   const msg = (message || "").toLowerCase();
   const hasFilterVerb = /\b(with|have|has|featuring|include|includes)\b/.test(msg);
   const hasInventoryWords = /\b(units|cabins|suites|lodges|properties|listings|rentals)\b/.test(msg);
   return hasFilterVerb && hasInventoryWords;
 }
 
-function extractAmenityFilterTerms(message) {
+function extractUnsupportedAmenityTerms(message) {
   const msg = String(message || "").toLowerCase();
   const m = msg.match(/\b(?:with|have|has|featuring|include|includes)\b(.+)/);
   if (!m) return [];
@@ -1265,8 +1163,9 @@ function extractAmenityFilterTerms(message) {
     .trim();
   if (!tail) return [];
 
+  const supported =
+    /\b(hot tub|hot tubs|hottub|hottubs|jacuzzi|jacuzzis|spa\b|whirlpool|pool|pools|fireplace|fireplaces|sauna|saunas|pet[- ]?friendly|pets?)\b/;
   const ignore = /\b(unit|units|cabin|cabins|suite|suites|lodge|lodges|property|properties|listing|listings|rental|rentals)\b/;
-  const capacityTerms = /\b(guest|guests|people|person|sleep|sleeps|bedroom|bedrooms|bathroom|bathrooms|bed|beds)\b/;
 
   const parts = tail
     .split(/\s*(?:,| and | or |\/|\+)\s*/)
@@ -1279,57 +1178,14 @@ function extractAmenityFilterTerms(message) {
     )
     .filter(Boolean);
 
-  const terms = [];
+  const unsupported = [];
   for (const part of parts) {
     if (ignore.test(part)) continue;
-    if (capacityTerms.test(part)) continue;
+    if (supported.test(part)) continue;
     if (/\d/.test(part)) continue;
-    terms.push(part);
+    unsupported.push(part);
   }
-  return terms;
-}
-
-function resolveAmenityTerms(terms, availableAmenityNames = []) {
-  const catalog = new Map(); // normalized -> canonical key to pass to hasAmenity
-  for (const name of availableAmenityNames || []) {
-    const normalized = normalizeAmenityTerm(name);
-    if (!normalized) continue;
-    catalog.set(normalized, normalized);
-    if (normalized.endsWith("s")) catalog.set(normalized.slice(0, -1), normalized);
-  }
-
-  const matched = [];
-  const unmatched = [];
-  const catalogEntries = Array.from(catalog.entries());
-
-  for (const term of terms || []) {
-    const canonicalTerm = canonicalAmenityKey(term);
-    let resolved = null;
-
-    if (catalog.has(canonicalTerm)) {
-      resolved = catalog.get(canonicalTerm);
-    } else {
-      const partial = catalogEntries.find(
-        ([normalized]) =>
-          normalized.includes(canonicalTerm) || canonicalTerm.includes(normalized)
-      );
-      if (partial) resolved = partial[1];
-    }
-
-    if (resolved) matched.push(resolved);
-    else unmatched.push(term);
-  }
-
-  return {
-    matched: Array.from(new Set(matched)),
-    unmatched,
-  };
-}
-
-function amenityExamples(availableAmenityNames = [], limit = 8) {
-  return Array.from(new Set((availableAmenityNames || []).map((x) => String(x).trim()).filter(Boolean)))
-    .sort((a, b) => a.localeCompare(b))
-    .slice(0, limit);
+  return unsupported;
 }
 
 function buildComparison(primarySafe, secondarySafe, message = "") {
@@ -1696,40 +1552,6 @@ app.post("/chat", async (req, res) => {
     }
     const recommendationIntent = detectRecommendationIntent(normalizedMessage);
 
-    const rememberOnlyCapture =
-      constraintSignals &&
-      (constraintSignals.explicitRemember || Boolean(constraintSignals.rememberedText)) &&
-      isRememberOnlyCaptureRequest(userMessage);
-    if (rememberOnlyCapture) {
-      const activeConstraints = constraintsCurrent || constraintsBaseline || {};
-      const amenityKeys = Array.isArray(activeConstraints.amenityKeys)
-        ? activeConstraints.amenityKeys
-        : [];
-      const unitType = activeConstraints.unitType || null;
-      const wantsPetFriendly = Boolean(activeConstraints.wantsPetFriendly);
-      const capacity = activeConstraints.capacity || null;
-      const dates = activeConstraints.dates || null;
-      setSession(sessionId, {
-        lastInventory: {
-          type: "constraints",
-          amenityKeys,
-          unitType,
-          petFriendly: wantsPetFriendly,
-          capacity,
-          dates,
-        },
-      });
-      const bullets = formatConstraintsBullets(activeConstraints);
-      const detail = bullets.length ? `\n\n${bullets.join("\n")}` : "";
-      return sendReply(
-        appendFollowupIfMissing(
-          `Saved your requirements.${detail}`,
-          "Say “top 3 options” and I’ll recommend the best matches."
-        ),
-        { route: "session_memory", replyType: "summary" }
-      );
-    }
-
     const runRecommendations = async ({
       capacity = null,
       amenityKeys = [],
@@ -1956,16 +1778,6 @@ app.post("/chat", async (req, res) => {
       const amenityKeys = detectAmenityKeys(normalizedMessage);
       const wantsPetFriendly = detectPetFriendlyFilter(normalizedMessage);
       const unitType = detectUnitType(normalizedMessage);
-      setSession(sessionId, {
-        lastInventory: {
-          type: "constraints",
-          amenityKeys,
-          unitType,
-          petFriendly: wantsPetFriendly,
-          capacity: capacity || null,
-          dates: dates || null,
-        },
-      });
       const recs = await runRecommendations({
         capacity,
         amenityKeys,
@@ -2295,7 +2107,6 @@ app.post("/chat", async (req, res) => {
     if (
       !listingId &&
       (isInventoryAvailabilityQuestion(userMessage) ||
-        detectInventoryDateSuggestionRequest(userMessage) ||
         effectiveIntent === "inventory_availability" ||
         (followupInventory?.type === "availability" && !hasAmenityFollowupSignal) ||
         inventoryFollowupAvailability)
@@ -2316,60 +2127,6 @@ app.post("/chat", async (req, res) => {
         setDebugHeader("Dates", `${dates.start}..${dates.end}`);
       }
       if (!dates) {
-        if (detectInventoryDateSuggestionRequest(normalizedMessage)) {
-          const nights = extractRequestedNights(normalizedMessage, 2);
-          const searchStart = getTodayIso();
-          const searchHorizonDays = 45;
-          const searchEnd = addDays(searchStart, searchHorizonDays);
-          const sourceListings = unitType
-            ? listings.filter((l) =>
-                String(l.name || "").toLowerCase().includes(unitType)
-              )
-            : listings;
-          const calendars = await mapWithConcurrency(
-            sourceListings,
-            INVENTORY_AVAILABILITY_CONCURRENCY,
-            async (l) => {
-              try {
-                const days = await fetchCalendarRange(l.id, searchStart, searchEnd, accessToken);
-                return { id: l.id, dayMap: toCalendarDayMap(days) };
-              } catch (err) {
-                console.error("Inventory date suggestion error:", err);
-                return null;
-              }
-            }
-          );
-          const calendarsByListing = new Map(
-            calendars.filter(Boolean).map((x) => [String(x.id), x.dayMap])
-          );
-          const suggestions = findInventoryRangeSuggestions(
-            calendarsByListing,
-            searchStart,
-            searchHorizonDays,
-            nights,
-            2
-          );
-          if (suggestions.length > 0) {
-            const label = unitType ? ` for ${unitType}s` : "";
-            const lines = suggestions
-              .map(
-                (s) =>
-                  `• ${s.start} to ${s.end} (${s.nights} ${s.nights === 1 ? "night" : "nights"}) — ${s.availableCount} unit${s.availableCount === 1 ? "" : "s"} available`
-              )
-              .join("\n");
-            return sendReply(
-              appendFollowupIfMissing(
-                `Here are the next realistic date ranges${label}:\n\n${lines}`,
-                "Want me to check one of these ranges for a specific unit?"
-              ),
-              { route: "inventory_availability", replyType: "availability" }
-            );
-          }
-          return sendReply(
-            "I couldn't find near-term ranges with availability right now. Share exact dates and I’ll check them directly.",
-            { route: "inventory_availability", replyType: "availability" }
-          );
-        }
         return sendReply(
           "Which dates should I check for availability? For example: “tonight” or “2026-03-24 to 2026-03-26”.",
           { route: "inventory_availability", replyType: "availability" }
@@ -2612,77 +2369,33 @@ app.post("/chat", async (req, res) => {
           ) &&
           (looksLikeListRequest || amenityKeys.length || unitType || effectiveIntent === "amenity_inventory")
         ) {
-        // Fetch details for each listing (cached), convert to safe facts, filter by amenity
-        const safes = await Promise.all(
-          listings.map(async (l) => {
-            const full = await fetchListingByIdCached(l.id, accessToken);
-            return toSafeListingFacts(full, { audience: "postbooking" });
-          })
-        );
-
-        const availableAmenityNames = Array.from(
-          new Set(safes.flatMap((s) => s.amenities || []).map((x) => String(x).trim()).filter(Boolean))
-        );
-        const dynamicAmenityKeys = detectAmenityKeys(normalizedMessage, {
-          availableAmenityNames,
-        });
-        if (!amenityKeys.length && dynamicAmenityKeys.length) {
-          amenityKeys = dynamicAmenityKeys;
-        }
-        const dynamicAmenityKey =
-          detectAmenityQuery(normalizedMessage, { availableAmenityNames }) ||
-          amenityKey ||
-          followupAmenityKey;
-        let effectiveAmenityKeys = amenityKeys.length
-          ? amenityKeys
-          : dynamicAmenityKey
-            ? [dynamicAmenityKey]
-            : [];
-
-        const extractedAmenityTerms = extractAmenityFilterTerms(normalizedMessage);
-        const resolvedAmenityTerms = resolveAmenityTerms(
-          extractedAmenityTerms,
-          availableAmenityNames
-        );
-        if (resolvedAmenityTerms.matched.length) {
-          effectiveAmenityKeys = Array.from(
-            new Set([...effectiveAmenityKeys, ...resolvedAmenityTerms.matched])
+        const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
+        const unsupportedTerms = extractUnsupportedAmenityTerms(normalizedMessage);
+        if (unsupportedTerms.length > 0) {
+          return sendReply(
+            `I can’t reliably filter by ${unsupportedTerms.map((t) => `"${t}"`).join(", ")} yet. ` +
+              "I can filter by hot tubs, jacuzzis, pools, fireplaces, and saunas.",
+            { route: "amenity_inventory", replyType: "inventory" }
           );
         }
-
-        const needsAmenityPrompt =
+        const unsupportedAmenityFilter =
           effectiveAmenityKeys.length === 0 &&
           !wantsPetFriendly &&
-          looksLikeAmenityFilter(normalizedMessage);
-        if (needsAmenityPrompt) {
-          const examples = amenityExamples(availableAmenityNames);
-          const suffix = examples.length
-            ? ` For example: ${examples.join(", ")}.`
-            : "";
+          looksLikeAmenityFilterWithoutSupportedAmenity(normalizedMessage);
+        if (unsupportedAmenityFilter) {
           return sendReply(
-            `Tell me which amenity you want, and I’ll filter units for it.${suffix}`,
+            "I can filter units by hot tubs, jacuzzis, pools, fireplaces, and saunas right now. " +
+              "Which amenity would you like me to use?",
             { route: "amenity_inventory", replyType: "inventory" }
           );
         }
-
-        if (extractedAmenityTerms.length > 0 && effectiveAmenityKeys.length === 0) {
-          const examples = amenityExamples(availableAmenityNames);
-          const suffix = examples.length
-            ? ` Try one of these: ${examples.join(", ")}.`
-            : "";
-          return sendReply(
-            `I couldn’t match ${extractedAmenityTerms.map((t) => `"${t}"`).join(", ")} to a known amenity.${suffix}`,
-            { route: "amenity_inventory", replyType: "inventory" }
-          );
-        }
-
         if (effectiveAmenityKeys.length) {
           setDebugHeader("AmenityKeys", effectiveAmenityKeys.join(","));
         }
         if (unitType) setDebugHeader("UnitType", unitType);
         if (wantsPetFriendly) setDebugHeader("PetFriendly", "true");
         setSession(sessionId, {
-          lastAmenityKey: effectiveAmenityKeys[0] || dynamicAmenityKey || null,
+          lastAmenityKey: amenityKey || effectiveAmenityKeys[0] || null,
           lastInventory: {
             type: "amenity",
             amenityKeys: effectiveAmenityKeys,
@@ -2690,6 +2403,13 @@ app.post("/chat", async (req, res) => {
             petFriendly: wantsPetFriendly,
           },
         });
+        // Fetch details for each listing (cached), convert to safe facts, filter by amenity
+        const safes = await Promise.all(
+          listings.map(async (l) => {
+            const full = await fetchListingByIdCached(l.id, accessToken);
+            return toSafeListingFacts(full, { audience: "postbooking" });
+          })
+        );
 
         let matches = safes;
         if (effectiveAmenityKeys.length) {

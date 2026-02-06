@@ -96,19 +96,6 @@
     "expectRegex": []
   },
   {
-    "name": "inventory-date-range-suggestions",
-    "sessionId": "golden-inventory-ranges",
-    "message": "What are the next two realistic check-in/check-out ranges I should consider?",
-    "expectOneOfIncludes": [
-      "next realistic date ranges",
-      "Want me to check one of these ranges"
-    ],
-    "forbidIncludes": [
-      "Which unit are you asking about?"
-    ],
-    "expectRegex": []
-  },
-  {
     "name": "availability-soft-ask",
     "sessionId": "golden-soft",
     "message": "Thinking about a weekend at Red Fern — any openings?",
@@ -992,46 +979,6 @@
     "expectReplyType": "availability",
     "forbidIncludes": [
       "Book now: Book these dates"
-    ]
-  },
-  {
-    "name": "longtail-couple-reco-setup",
-    "sessionId": "golden-longtail-couple-reco",
-    "message": "Remember this: 2 guests, next weekend, hot tub required, privacy first.",
-    "expectOneOfIncludes": [
-      "saved",
-      "remember",
-      "requirements",
-      "I can"
-    ],
-    "expectReplyType": "summary"
-  },
-  {
-    "name": "longtail-couple-reco-top3",
-    "sessionId": "golden-longtail-couple-reco",
-    "message": "Can you give me your top three options and a quick reason for each?",
-    "expectOneOfIncludes": [
-      "Top picks",
-      "Best matches",
-      "• ["
-    ],
-    "expectReplyType": "inventory",
-    "forbidIncludes": [
-      "Which unit are you asking about?"
-    ]
-  },
-  {
-    "name": "longtail-couple-reco-pick1",
-    "sessionId": "golden-longtail-couple-reco",
-    "message": "If you had to pick one for an anniversary, what would you choose and why?",
-    "expectOneOfIncludes": [
-      "Top picks",
-      "Best matches",
-      "• ["
-    ],
-    "expectReplyType": "inventory",
-    "forbidIncludes": [
-      "Which unit are you asking about?"
     ]
   }
 ]

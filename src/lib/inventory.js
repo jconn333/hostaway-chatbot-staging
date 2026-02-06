@@ -8,63 +8,20 @@ const AMENITY_SYNONYMS = [
   { key: "sauna", patterns: ["sauna", "saunas", "steam room"] },
 ];
 
-const AMENITY_PATTERN_TO_KEY = new Map();
-for (const entry of AMENITY_SYNONYMS) {
-  AMENITY_PATTERN_TO_KEY.set(entry.key, entry.key);
-  for (const pattern of entry.patterns) {
-    AMENITY_PATTERN_TO_KEY.set(pattern, entry.key);
-  }
-}
-
-export function normalizeAmenityTerm(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[-_/]/g, " ")
-    .replace(/[^\w\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-export function canonicalAmenityKey(value) {
-  const normalized = normalizeAmenityTerm(value);
-  if (!normalized) return "";
-  if (AMENITY_PATTERN_TO_KEY.has(normalized)) return AMENITY_PATTERN_TO_KEY.get(normalized);
-  if (normalized.endsWith("s")) {
-    const singular = normalized.slice(0, -1);
-    if (AMENITY_PATTERN_TO_KEY.has(singular)) return AMENITY_PATTERN_TO_KEY.get(singular);
-  }
-  return normalized;
-}
-
-function buildCatalog(availableAmenityNames = []) {
-  const catalog = new Set();
-  for (const name of availableAmenityNames) {
-    const normalized = normalizeAmenityTerm(name);
-    if (!normalized) continue;
-    catalog.add(normalized);
-    if (normalized.endsWith("s")) catalog.add(normalized.slice(0, -1));
-  }
-  return catalog;
-}
-
-export function detectAmenityQuery(message, options = {}) {
-  const keys = detectAmenityKeys(message, options);
+export function detectAmenityQuery(message) {
+  const keys = detectAmenityKeys(message);
   return keys.length ? keys[0] : null;
 }
 
-export function detectAmenityKeys(message, options = {}) {
+export function detectAmenityKeys(message) {
   const msg = (message || "").toLowerCase();
-  const normalizedMessage = normalizeAmenityTerm(msg);
-  const catalog = buildCatalog(options.availableAmenityNames || []);
-  const forceBroad = Boolean(options.forceBroad);
 
   // simple phrasing patterns
   const looksLikeQuery = /\b(which|what|any|do any|show me|list|with)\b/.test(msg);
   const inventoryWords = /\b(units|cabins|suites|lodges|places|properties|rentals|listings)\b/.test(
     msg
   );
-  const broadQuery = forceBroad || looksLikeQuery || inventoryWords;
+  const broadQuery = looksLikeQuery || inventoryWords;
 
   const keys = new Set();
   for (const a of AMENITY_SYNONYMS) {
@@ -75,42 +32,20 @@ export function detectAmenityKeys(message, options = {}) {
     }
   }
 
-  // Dynamic detection from amenity names present in Hostaway listing facts.
-  if (broadQuery && catalog.size) {
-    for (const amenity of catalog) {
-      if (!amenity || amenity.length < 3) continue;
-      if (normalizedMessage.includes(amenity)) {
-        keys.add(canonicalAmenityKey(amenity));
-      }
-    }
-  }
-
   return [...keys];
 }
 
 export function detectAmenityKeyLoose(message) {
-  const msg = normalizeAmenityTerm(message);
+  const msg = (message || "").toLowerCase();
   for (const a of AMENITY_SYNONYMS) {
     for (const p of a.patterns) {
-      const normalized = normalizeAmenityTerm(p);
-      if (msg.includes(normalized)) return a.key;
+      if (msg.includes(p)) return a.key;
     }
   }
   return null;
 }
 
 export function hasAmenity(safeListing, amenityKey) {
-  const list = (safeListing?.amenities || []).map((x) => normalizeAmenityTerm(x)).filter(Boolean);
-  const wanted = canonicalAmenityKey(amenityKey);
-  if (!wanted) return false;
-  return list.some((a) => {
-    const aCanonical = canonicalAmenityKey(a);
-    return (
-      a.includes(wanted) ||
-      wanted.includes(a) ||
-      aCanonical === wanted ||
-      aCanonical.includes(wanted) ||
-      wanted.includes(aCanonical)
-    );
-  });
+  const list = (safeListing?.amenities || []).map((x) => String(x).toLowerCase());
+  return list.some((a) => a.includes(amenityKey));
 }
