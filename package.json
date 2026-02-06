@@ -4,13 +4,16 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test tests/*.test.js",
     "smoke": "node scripts/smoke.js",
     "smoke:terminal": "./scripts/terminal-smoke.sh",
     "smoke:inprocess": "node scripts/inprocess-smoke.js",
     "dev": "node scripts/dev-watch.js",
     "slack:post": "node scripts/slack-post.js",
-    "golden": "node scripts/golden-run.js"
+    "golden": "node scripts/golden-run.js",
+    "golden:core": "GOLDEN_MODE=core node scripts/golden-run.js",
+    "golden:full": "GOLDEN_MODE=full node scripts/golden-run.js",
+    "monitor:synthetic": "node scripts/synthetic-monitor.js"
   },
   "keywords": [],
   "author": "",

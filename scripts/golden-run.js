@@ -3,6 +3,21 @@ import { readFile } from "node:fs/promises";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const TESTS_PATH = new URL("./golden-prompts.json", import.meta.url);
+const GOLDEN_MODE = (process.env.GOLDEN_MODE || "full").toLowerCase();
+const CORE_TESTS = new Set([
+  "availability-weekend",
+  "amenity-followup",
+  "joy-two-nights",
+  "pet-policy-generic",
+  "pet-friendly-suites",
+  "inventory-availability",
+  "inventory-followup",
+  "disambiguation",
+  "disambiguation-followup",
+  "policy-smoking",
+  "policy-parties",
+  "booking-short",
+]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -51,7 +66,11 @@ function expectOneOfIncludes(reply, values = []) {
 
 async function run() {
   const raw = await readFile(TESTS_PATH, "utf8");
-  const tests = JSON.parse(raw);
+  const allTests = JSON.parse(raw);
+  const tests =
+    GOLDEN_MODE === "core"
+      ? allTests.filter((t) => CORE_TESTS.has(t.name))
+      : allTests;
 
   let server = null;
   if (!process.env.BASE_URL) {
@@ -61,6 +80,7 @@ async function run() {
   }
 
   let failed = 0;
+  let passed = 0;
   for (const t of tests) {
     const reply = await postChat(t.message, t.sessionId);
 
@@ -75,6 +95,7 @@ async function run() {
       console.error(`Message: ${t.message}`);
       console.error(`Reply: ${reply}`);
     } else {
+      passed += 1;
       console.log(`✅ ${t.name}`);
     }
   }
@@ -85,11 +106,11 @@ async function run() {
   }
 
   if (failed > 0) {
-    console.error(`\n❌ Golden prompts failed: ${failed} failing test(s)`);
+    console.error(`\n❌ Golden prompts failed: ${failed} failing test(s), ${passed} passing test(s)`);
     process.exit(1);
   }
 
-  console.log("\n✅ Golden prompts PASSED");
+  console.log(`\n✅ Golden prompts PASSED (${passed} tests, mode=${GOLDEN_MODE})`);
 }
 
 run().catch((err) => {

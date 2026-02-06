@@ -56,6 +56,7 @@ const metrics = {
   requests_total: 0,
   errors_total: 0,
   intents: {},
+  intent_fallbacks: 0,
   availability_queries: 0,
   policy_queries: 0,
 };
@@ -499,7 +500,11 @@ app.get("/healthz", (req, res) => {
 });
 
 app.get("/metrics", (req, res) => {
-  res.json(metrics);
+  const fallbackRate =
+    metrics.requests_total > 0
+      ? Number((metrics.intent_fallbacks / metrics.requests_total).toFixed(4))
+      : 0;
+  res.json({ ...metrics, intent_fallback_rate: fallbackRate });
 });
 
 /* ---------- SANDBOX UI ---------- */
@@ -557,20 +562,45 @@ app.post("/chat", async (req, res) => {
         ? session.lastInventory
         : null;
     const intent = await classifyIntent(userMessage);
-    metrics.intents[intent.intent] = (metrics.intents[intent.intent] || 0) + 1;
-    setSession(sessionId, { lastIntent: intent.intent });
-    setDebugHeader("Intent", intent.intent);
+    const policyIntentRaw = detectPolicyIntent(userMessage);
+    const modelIntent = intent.intent || "general";
+    const modelConfidence = Number(intent.confidence ?? 0);
+    const lowConfidence = Number.isFinite(modelConfidence) && modelConfidence > 0 && modelConfidence < 0.45;
+    const heuristicSupports =
+      isInventoryAvailabilityQuestion(userMessage) ||
+      isInventoryQuery(userMessage) ||
+      isAvailabilityQuestion(userMessage) ||
+      Boolean(policyIntentRaw) ||
+      looksLikeProximityQuery(userMessage) ||
+      looksLikeSummaryRequest(userMessage) ||
+      Boolean(detectAmenityQuery(userMessage));
+    const effectiveIntent =
+      lowConfidence &&
+      ["availability", "inventory_availability", "amenity_inventory", "policy", "compare", "summary"].includes(
+        modelIntent
+      ) &&
+      !heuristicSupports
+        ? "general"
+        : modelIntent;
+    if (effectiveIntent !== modelIntent) {
+      metrics.intent_fallbacks += 1;
+      setDebugHeader("IntentFallback", `${modelIntent}->${effectiveIntent}`);
+    }
+    metrics.intents[effectiveIntent] = (metrics.intents[effectiveIntent] || 0) + 1;
+    setSession(sessionId, { lastIntent: effectiveIntent });
+    setDebugHeader("Intent", effectiveIntent);
     logEvent("chat_request", {
       sessionId: sessionId || "anonymous",
       listingId: listingId || null,
-      intent: intent.intent,
+      intent: effectiveIntent,
+      modelIntent,
+      modelConfidence,
     });
-    const policyIntentRaw = detectPolicyIntent(userMessage);
     setDebugHeader("PolicyIntent", policyIntentRaw);
     const earlyAmenityIntent = detectAmenityKeyLoose(userMessage);
     let inventoryIntent =
       isInventoryQuery(userMessage) ||
-      ["inventory_availability", "amenity_inventory", "policy"].includes(intent.intent);
+      ["inventory_availability", "amenity_inventory", "policy"].includes(effectiveIntent);
     if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(userMessage)) {
       inventoryIntent = false;
     }
@@ -699,7 +729,7 @@ app.post("/chat", async (req, res) => {
     if (
       !listingId &&
       (isInventoryAvailabilityQuestion(userMessage) ||
-        intent.intent === "inventory_availability" ||
+        effectiveIntent === "inventory_availability" ||
         followupInventory?.type === "availability")
     ) {
       let dates = extractDates(userMessage);
@@ -808,7 +838,7 @@ app.post("/chat", async (req, res) => {
     let primaryId = listingId;
     let secondaryId = findSecondaryListingId(userMessage, listings, listingId);
     if (
-      (looksLikeProximityQuery(userMessage) || intent.intent === "compare") &&
+      (looksLikeProximityQuery(userMessage) || effectiveIntent === "compare") &&
       session?.listingId &&
       listingId &&
       String(listingId) !== String(session.listingId)
@@ -822,14 +852,14 @@ app.post("/chat", async (req, res) => {
     if (
       primaryId &&
       secondaryId &&
-      (looksLikeProximityQuery(userMessage) || intent.intent === "compare")
+      (looksLikeProximityQuery(userMessage) || effectiveIntent === "compare")
     ) {
       const primaryFull = await fetchListingByIdCached(primaryId, accessToken);
       const secondaryFull = await fetchListingByIdCached(secondaryId, accessToken);
       const primarySafe = toSafeListingFacts(primaryFull, { audience: "postbooking" });
       const secondarySafe = toSafeListingFacts(secondaryFull, { audience: "postbooking" });
 
-      if (intent.intent === "compare" && !looksLikeProximityQuery(userMessage)) {
+      if (effectiveIntent === "compare" && !looksLikeProximityQuery(userMessage)) {
         logEvent("compare_response", {
           sessionId: sessionId || "anonymous",
           primaryId,
@@ -902,7 +932,7 @@ app.post("/chat", async (req, res) => {
         policyIntentRaw === "pets" && !looksLikeListRequest && !amenityKeys.length && !unitType;
       const availabilityAsked =
         isAvailabilityQuestion(userMessage) ||
-        intent.intent === "availability" ||
+        effectiveIntent === "availability" ||
         session?.lastIntent === "availability";
 
       if (followupInventory?.type === "amenity") {
@@ -924,7 +954,7 @@ app.post("/chat", async (req, res) => {
         amenityKey ||
         wantsPetFriendly ||
         unitType ||
-        intent.intent === "amenity_inventory"
+        effectiveIntent === "amenity_inventory"
       ) {
         if (
           !skipAmenityInventory &&
@@ -935,7 +965,7 @@ app.post("/chat", async (req, res) => {
             !amenityKey &&
             !wantsPetFriendly
           ) &&
-          (looksLikeListRequest || amenityKeys.length || unitType || intent.intent === "amenity_inventory")
+          (looksLikeListRequest || amenityKeys.length || unitType || effectiveIntent === "amenity_inventory")
         ) {
         const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
         if (effectiveAmenityKeys.length) {
@@ -1102,14 +1132,14 @@ app.post("/chat", async (req, res) => {
     // If availability question AND user gave dates -> answer from Hostaway truth
     const availabilityAsked =
       isAvailabilityQuestion(userMessage) ||
-      intent.intent === "availability" ||
+      effectiveIntent === "availability" ||
       session?.lastIntent === "availability";
     if (availabilityAsked) metrics.availability_queries += 1;
     let dates = extractDates(userMessage);
     if (
       !dates &&
       (isAvailabilityQuestion(userMessage) ||
-        intent.intent === "availability" ||
+        effectiveIntent === "availability" ||
         session?.lastIntent === "availability") &&
       session?.dates
     ) {
@@ -1152,7 +1182,7 @@ app.post("/chat", async (req, res) => {
     if (
       dates &&
       (isAvailabilityQuestion(userMessage) ||
-        intent.intent === "availability" ||
+        effectiveIntent === "availability" ||
         session?.lastIntent === "availability")
     ) {
       setSession(sessionId, { dates });
@@ -1166,6 +1196,7 @@ app.post("/chat", async (req, res) => {
 
       const days = await fetchCalendarRange(listingId, dates.start, endForCalendar, accessToken);
       const data = summarizeAvailabilityWithAlternatives(days, dates.start, dates.end);
+      setDebugHeader("AvailabilityReason", data?.reasonCode || "unknown");
 
       // Fetch safe listing to get stable bookingUrl
       const listing = await fetchListingById(listingId, accessToken);
@@ -1192,6 +1223,7 @@ app.post("/chat", async (req, res) => {
         start: dates.start,
         end: dates.end,
         available: Boolean(data?.available),
+        reasonCode: data?.reasonCode || "unknown",
       });
       return res.json({
         reply: appendFollowupIfMissing(
@@ -1255,7 +1287,7 @@ app.post("/chat", async (req, res) => {
       }
     }
 
-    if (looksLikeSummaryRequest(userMessage) || intent.intent === "summary") {
+    if (looksLikeSummaryRequest(userMessage) || effectiveIntent === "summary") {
       const bookingLine =
         safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
       setSession(sessionId, { lastMessage: userMessage });

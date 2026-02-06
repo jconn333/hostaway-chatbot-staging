@@ -123,6 +123,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   if (blocked.length === 0) {
     return {
       available: true,
+      reasonCode: "available",
       suggestedStart: null,
       message: `Yes — this unit is available from ${start} to ${end}.`,
     };
@@ -152,6 +153,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   if (day?.status === "reserved") {
     return {
       available: false,
+      reasonCode: "reserved",
       suggestedStart,
       message:
         `No — this unit is already booked during ${start} to ${end} (booked on ${day.date}).` +
@@ -162,6 +164,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   if (day?.minimumStay && day.minimumStay > 1) {
     return {
       available: false,
+      reasonCode: "minimum_stay",
       suggestedStart,
       message:
         `No — this unit requires a minimum stay of ${day.minimumStay} nights starting on ${day.date}.` +
@@ -172,6 +175,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   if (day?.closedOnArrival === 1) {
     return {
       available: false,
+      reasonCode: "closed_on_arrival",
       suggestedStart,
       message: `No — check-in is not allowed on ${day.date} for this unit.` + suggestion,
     };
@@ -180,6 +184,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   if (day?.closedOnDeparture === 1) {
     return {
       available: false,
+      reasonCode: "closed_on_departure",
       suggestedStart,
       message: `No — check-out is not allowed on ${day.date} for this unit.` + suggestion,
     };
@@ -187,6 +192,7 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
 
   return {
     available: false,
+    reasonCode: "unavailable_other",
     suggestedStart,
     message: `No — this unit is not available for the selected dates.` + suggestion,
   };
