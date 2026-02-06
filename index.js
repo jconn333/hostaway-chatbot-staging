@@ -471,7 +471,7 @@ function buildSafeSummary(safe) {
       }.`
     );
   }
-  if (safe.bookingUrl) parts.push(`\nBook now: ${safe.bookingUrl}`);
+  if (safe.bookingUrl) parts.push(`\nBook now: [${safe.name}](${safe.bookingUrl})`);
   parts.push("\nWould you like me to check availability or answer anything else?");
   const text = parts.join("\n");
   if (text.length <= MAX_SUMMARY_CHARS) return text;
@@ -483,6 +483,11 @@ function formatAmenityList(amenities, limit = 8) {
   if (list.length === 0) return "—";
   const shown = list.slice(0, limit).join(", ");
   return list.length > limit ? `${shown}…` : shown;
+}
+
+function formatBookLink(url, label = "Book these dates") {
+  if (!url) return "";
+  return `[${label}](${url})`;
 }
 
 function formatCheckTimes(safe) {
@@ -1582,10 +1587,12 @@ app.post("/chat", async (req, res) => {
         let suggestLine = "";
         if (next.suggestedEnd) {
           const suggestUrl = `${safe.bookingUrl}?start=${next.start}&end=${next.suggestedEnd}`;
-          suggestLine = `\n\nSuggested stay: ${next.start} to ${next.suggestedEnd}\nBook now: ${suggestUrl}`;
+          suggestLine =
+            `\n\nSuggested stay: ${next.start} to ${next.suggestedEnd}\n` +
+            `Book now: ${formatBookLink(suggestUrl)}`;
         }
         return respond(
-          `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${bookUrl}` +
+          `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${formatBookLink(bookUrl)}` +
             suggestLine +
             memoryNote
         );
@@ -1642,7 +1649,7 @@ app.post("/chat", async (req, res) => {
         if (alternatives.length) {
           const altLines = alternatives.map((a) => {
             const url = `${safe.bookingUrl}?start=${a.start}&end=${a.end}`;
-            return `• ${a.start} to ${a.end} (${a.nights} nights) — ${url}`;
+            return `• ${a.start} to ${a.end} (${a.nights} nights) — ${formatBookLink(url)}`;
           });
           flexLine = `\n\nClosest alternatives:\n${altLines.join("\n")}`;
         }
@@ -1654,7 +1661,7 @@ app.post("/chat", async (req, res) => {
           })
         : "";
 
-      const bookingLine = bookUrl ? `\n\nBook now: ${bookUrl}` : "";
+      const bookingLine = bookUrl ? `\n\nBook now: ${formatBookLink(bookUrl)}` : "";
       logEvent("availability_response", {
         sessionId: sessionId || "anonymous",
         listingId,
@@ -1685,7 +1692,7 @@ app.post("/chat", async (req, res) => {
       const reply = has
         ? `Yes — ${safe.name} has a ${listingAmenityKey}.`
         : `No — ${safe.name} does not have a ${listingAmenityKey}.`;
-      return respond(reply + `\n\nBook now: ${safe.bookingUrl}` + memoryNote);
+      return respond(reply + `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}` + memoryNote);
     }
 
     // General Q&A: Fetch listing and build safe facts
@@ -1715,7 +1722,9 @@ app.post("/chat", async (req, res) => {
           ? buildEvidenceLine({ confidence: "high", source: evidenceSource })
           : "";
         const bookingLine =
-          safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
+          safe.bookingUrl && wantsBookingLink
+            ? `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}`
+            : "";
         logEvent("policy_response", {
           sessionId: sessionId || "anonymous",
           listingId,
@@ -1733,7 +1742,9 @@ app.post("/chat", async (req, res) => {
 
     if (looksLikeSummaryRequest(normalizedMessage) || effectiveIntent === "summary") {
       const bookingLine =
-        safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
+        safe.bookingUrl && wantsBookingLink
+          ? `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}`
+          : "";
       setSession(sessionId, { lastMessage: userMessage });
       respond(buildSafeSummary(safe) + bookingLine + memoryNote);
       return;
@@ -1776,7 +1787,9 @@ app.post("/chat", async (req, res) => {
     }
 
     const bookingLine =
-      safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
+      safe.bookingUrl && wantsBookingLink
+        ? `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}`
+        : "";
     const aiEvidenceLine = wantsEvidenceLine(normalizedMessage)
       ? buildEvidenceLine({ confidence: "medium", source: "unit safe facts" })
       : "";
