@@ -12,6 +12,7 @@ import {
   extractDates,
   getTodayIso,
   findNextAvailableWeekend,
+  findAvailableWeekendsInRange,
 } from "./src/lib/availability.js";
 import {
   getHostawayAccessToken,
@@ -19,6 +20,7 @@ import {
   toSafeListingFacts,
   fetchListingById,
   fetchCalendarRange,
+  fetchListingByIdCached,
 } from "./src/lib/hostaway.js";
 import {
   suggestUnits,
@@ -32,7 +34,6 @@ import {
   detectAmenityKeyLoose,
   hasAmenity,
 } from "./src/lib/inventory.js";
-import { fetchListingByIdCached } from "./src/lib/hostaway.js";
 
 dotenv.config();
 
@@ -170,6 +171,44 @@ function normalizeUserMessage(message) {
     .replace(/\bpet[- ]?freindly\b/gi, "pet-friendly")
     .replace(/\bcheckin\b/gi, "check in")
     .replace(/\bcheckout\b/gi, "check out");
+}
+
+function monthQueryToRange(message, timeZone = "America/New_York") {
+  const msg = String(message || "").toLowerCase();
+  const months = {
+    jan: 1, january: 1,
+    feb: 2, february: 2,
+    mar: 3, march: 3,
+    apr: 4, april: 4,
+    may: 5,
+    jun: 6, june: 6,
+    jul: 7, july: 7,
+    aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10,
+    nov: 11, november: 11,
+    dec: 12, december: 12,
+  };
+  const m = msg.match(
+    /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/
+  );
+  if (!m) return null;
+
+  const month = months[m[1]];
+  if (!month) return null;
+
+  const todayIso = getTodayIso(timeZone);
+  const [todayYear, todayMonth] = todayIso.split("-").map(Number);
+  const year = month < todayMonth ? todayYear + 1 : todayYear;
+  const mm = String(month).padStart(2, "0");
+  const start = `${year}-${mm}-01`;
+  const monthEndDate = new Date(Date.UTC(year, month, 0)); // day 0 of next month
+  const end = `${monthEndDate.getUTCFullYear()}-${String(monthEndDate.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    monthEndDate.getUTCDate()
+  ).padStart(2, "0")}`;
+  const rawName = String(m[1] || "");
+  const monthName = rawName.charAt(0).toUpperCase() + rawName.slice(1).toLowerCase();
+  return { start, end, monthName };
 }
 
 function wantsEvidenceLine(message) {
@@ -1600,6 +1639,45 @@ app.post("/chat", async (req, res) => {
       return respond(
         "I couldn’t find an available weekend in the next few months. " +
           "If you have specific dates in mind, I can check those." +
+          memoryNote
+      );
+    }
+    const monthRange = monthQueryToRange(normalizedMessage);
+    const wantsWeekendInMonth =
+      listingId &&
+      !dates &&
+      availabilityAsked &&
+      /\bweekend\b/.test(normalizedMessage) &&
+      Boolean(monthRange);
+    if (wantsWeekendInMonth) {
+      const listing = await fetchListingById(listingId, accessToken);
+      const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+      const calEnd = addDays(monthRange.end, 3); // allow Fri-Sun + min-stay extension checks
+      const days = await fetchCalendarRange(listingId, monthRange.start, calEnd, accessToken);
+      const weekends = findAvailableWeekendsInRange(days, monthRange.start, monthRange.end, 3);
+
+      if (!weekends.length) {
+        return respond(
+          `I couldn’t find an available weekend in ${monthRange.monthName}. Want me to check another month?` +
+            memoryNote
+        );
+      }
+
+      const lines = weekends.map((w) => {
+        const baseUrl = `${safe.bookingUrl}?start=${w.start}&end=${w.end}`;
+        if (w.minStay > 2) {
+          const base = `• ${w.start} to ${w.end} (Fri-Sun, requires ${w.minStay} nights)`;
+          if (w.suggestedEnd) {
+            const suggestUrl = `${safe.bookingUrl}?start=${w.start}&end=${w.suggestedEnd}`;
+            return `${base} — [Book Fri-Sun](${baseUrl}) or [book ${w.minStay}-night stay](${suggestUrl})`;
+          }
+          return `${base} — [Book Fri-Sun](${baseUrl})`;
+        }
+        return `• ${w.start} to ${w.end} (Fri-Sun) — [Book this weekend](${baseUrl})`;
+      });
+
+      return respond(
+        `Available weekends in ${monthRange.monthName} for ${safe.name}:\n\n${lines.join("\n")}` +
           memoryNote
       );
     }

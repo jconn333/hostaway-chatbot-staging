@@ -4,6 +4,7 @@ import {
   extractDates,
   summarizeAvailabilityWithAlternatives,
   findAlternativeStays,
+  findAvailableWeekendsInRange,
   addDays,
 } from "../src/lib/availability.js";
 
@@ -75,4 +76,26 @@ test("findAlternativeStays honors minimum stay for the check-in day", () => {
   ];
   const out = findAlternativeStays(days, "2026-03-10", 2, 5, 1);
   assert.equal(out[0].nights >= 4, true);
+});
+
+test("findAvailableWeekendsInRange returns weekend windows inside month", () => {
+  const days = [
+    { date: "2026-03-06", isAvailable: 0, status: "reserved" },
+    { date: "2026-03-07", isAvailable: 0, status: "reserved" },
+    { date: "2026-03-13", isAvailable: 1, status: "available", minimumStay: 2, closedOnArrival: 0 },
+    { date: "2026-03-14", isAvailable: 1, status: "available", minimumStay: 2, closedOnArrival: 0 },
+    { date: "2026-03-15", isAvailable: 1, status: "available", closedOnDeparture: 0 },
+    { date: "2026-03-20", isAvailable: 1, status: "available", minimumStay: 3, closedOnArrival: 0 },
+    { date: "2026-03-21", isAvailable: 1, status: "available", minimumStay: 3, closedOnArrival: 0 },
+    { date: "2026-03-22", isAvailable: 1, status: "available", closedOnDeparture: 0 },
+    { date: "2026-03-23", isAvailable: 1, status: "available", closedOnDeparture: 0 },
+  ];
+
+  const out = findAvailableWeekendsInRange(days, "2026-03-01", "2026-03-31", 3);
+  assert.equal(out.length >= 2, true);
+  assert.equal(out[0].start, "2026-03-13");
+  assert.equal(out[0].end, "2026-03-15");
+  assert.equal(out[1].start, "2026-03-20");
+  assert.equal(out[1].minStay, 3);
+  assert.equal(out[1].suggestedEnd, "2026-03-23");
 });

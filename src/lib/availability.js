@@ -61,6 +61,74 @@ export function findNextAvailableWeekend(calendarDays, startDate, lookaheadDays 
   return null;
 }
 
+export function findAvailableWeekendsInRange(
+  calendarDays,
+  rangeStart,
+  rangeEnd,
+  limit = 3
+) {
+  const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
+  const byDate = new Map(daysArr.map((d) => [d.date, d]));
+  const out = [];
+
+  const isAvailableNight = (d) =>
+    !d || (d.isAvailable !== 0 && d.status !== "reserved");
+  const isArrivalOk = (d) => !d || d.closedOnArrival !== 1;
+  const isDepartureOk = (d) => !d || d.closedOnDeparture !== 1;
+
+  let cur = rangeStart;
+  while (cur <= rangeEnd && out.length < limit) {
+    if (weekdayOfIso(cur) !== 5) {
+      cur = addDays(cur, 1);
+      continue;
+    }
+
+    const friday = cur;
+    const saturday = addDays(friday, 1);
+    const sunday = addDays(friday, 2);
+    const monday = addDays(friday, 3);
+
+    const dayFri = byDate.get(friday);
+    const daySat = byDate.get(saturday);
+    const daySun = byDate.get(sunday);
+    const dayMon = byDate.get(monday);
+
+    if (!isAvailableNight(dayFri) || !isAvailableNight(daySat)) {
+      cur = addDays(cur, 7);
+      continue;
+    }
+    if (!isArrivalOk(dayFri)) {
+      cur = addDays(cur, 7);
+      continue;
+    }
+    if (daySun && !isDepartureOk(daySun)) {
+      cur = addDays(cur, 7);
+      continue;
+    }
+
+    const minStay = dayFri?.minimumStay || daySat?.minimumStay || 2;
+    let suggestedEnd = null;
+    if (minStay > 2) {
+      const canExtend =
+        isAvailableNight(daySun) &&
+        isAvailableNight(dayMon) &&
+        isDepartureOk(dayMon);
+      suggestedEnd = canExtend ? monday : null;
+    }
+
+    out.push({
+      start: friday,
+      end: sunday,
+      minStay,
+      suggestedEnd,
+    });
+
+    cur = addDays(cur, 7);
+  }
+
+  return out;
+}
+
 export function explainWeekendSearch(calendarDays, startDate, lookaheadDays = 180) {
   const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
   const byDate = new Map(daysArr.map((d) => [d.date, d]));
