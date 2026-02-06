@@ -14,10 +14,11 @@ const BASE_URL = (process.env.BASE_URL || "http://localhost:3000").replace(/\/$/
 const TARGET_URL = process.env.TARGET_URL || BASE_URL;
 const CHAT_URL = `${BASE_URL}/chat`;
 const HEALTH_URL = `${BASE_URL}/healthz`;
+const VERSION_URL = `${BASE_URL}/version`;
 const REQUEST_TIMEOUT_MS = Number(process.env.QA_TIMEOUT_MS || 15000);
 const MAX_RETRIES = Number(process.env.QA_MAX_RETRIES || 2);
-const SESSIONS_TO_RUN = Number(process.env.QA_SESSIONS || 4);
-const TURNS_LIMIT = Number(process.env.QA_TURNS_LIMIT || 0);
+const SESSIONS_TO_RUN = Number(process.env.QA_SESSIONS || 5);
+const TURNS_LIMIT = Number(process.env.QA_TURNS_LIMIT || 8);
 
 function sqlLit(v) {
   if (v === null || v === undefined) return "NULL";
@@ -212,16 +213,16 @@ const coreSessions = [
     turns: [
       { msg: "Hi, we are a family of 6 planning a trip. Which cabins or units fit us best?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "Please compare layout and bedrooms for options suitable for 6 people.", mustMention: ["bedroom"], expectingDirectAnswer: true },
-      { msg: "Give me two possible date ranges in May 2026 as YYYY-MM-DD to YYYY-MM-DD only. No extra words.", expectingDirectAnswer: true },
+      { msg: "Could you suggest two possible date ranges in May 2026 that might work for us?", expectingDirectAnswer: true },
       { msg: "Please remember this exactly: 6 guests, 3 bedrooms minimum, fireplace, strong wifi, budget-sensitive, dates 2026-05-15 to 2026-05-18." },
       { msg: "Based on those exact requirements, what are the best options?", mustMention: ["6"], expectingDirectAnswer: true },
-      { msg: "Do you have any option with fireplace and wifi for those dates? Answer yes or no only.", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
+      { msg: "For those dates, do you have an option with both a fireplace and strong wifi?", consistencyKey: "family_fire_wifi_dates", expectingDirectAnswer: true },
       { msg: "Actually maybe 4 guests and 2 bedrooms, same dates. What changes?", mustMention: ["date"], expectingDirectAnswer: true },
-      { msg: "What were my original requirements before that change? Bullet list only.", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
+      { msg: "Before I changed anything, can you restate my original requirements?", memoryMustInclude: ["6", "3 bedroom", "fireplace", "wifi", "2026-05-15"], expectingDirectAnswer: true },
       { msg: "Now check availability again for my original requirements, not the reduced ones.", mustMention: ["2026-05-15"], expectingDirectAnswer: true },
       { msg: "If your earlier yes/no answer conflicts with this result, reconcile the difference briefly.", mustMention: ["because"], expectingDirectAnswer: true },
       { msg: "Please correct any earlier mistake in one sentence.", mustMention: ["sorry"], expectingDirectAnswer: true },
-      { msg: "Return a final recommendation in valid JSON only with keys unit,date_range,why.", expectingDirectAnswer: true },
+      { msg: "Can you give me a final recommendation with the unit, suggested date range, and why it fits us?", expectingDirectAnswer: true },
     ],
   },
   {
@@ -234,16 +235,16 @@ const coreSessions = [
     turns: [
       { msg: "My partner and I want a romantic weekend getaway. Which units feel most private?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "Which of those have a hot tub and fireplace?", mustMention: ["hot"], expectingDirectAnswer: true },
-      { msg: "Answer yes or no only: do you have at least one private hot-tub option for two guests next weekend?", consistencyKey: "couple_hot_tub", expectingDirectAnswer: true },
+      { msg: "Do you have at least one private hot-tub option for two guests next weekend?", consistencyKey: "couple_hot_tub", expectingDirectAnswer: true },
       { msg: "Remember this: 2 guests, next weekend, hot tub required, privacy first." },
       { msg: "Give me exactly 3 bullet points with your top choices.", expectingDirectAnswer: true },
-      { msg: "Now respond in JSON only: {\"best_unit\":\"\",\"reason\":\"\"}", expectingDirectAnswer: true },
+      { msg: "If you had to pick one, what’s the best unit and what’s your reason?", expectingDirectAnswer: true },
       { msg: "Actually, add pet-friendly as a new requirement too. Any conflicts?", mustMention: ["pet"], expectingDirectAnswer: true },
-      { msg: "What were my requirements before adding pets? bullet list only.", memoryMustInclude: ["2", "next weekend", "hot tub", "privacy"], expectingDirectAnswer: true },
-      { msg: "Dates only please for the soonest 2-night stay options.", expectingDirectAnswer: true },
+      { msg: "Before I added pet-friendly, what requirements had I already given you?", memoryMustInclude: ["2", "next weekend", "hot tub", "privacy"], expectingDirectAnswer: true },
+      { msg: "What are the soonest 2-night date options you’d suggest?", expectingDirectAnswer: true },
       { msg: "You contradicted yourself if you said no then gave options. Repair that clearly in one sentence.", mustMention: ["because"], expectingDirectAnswer: true },
-      { msg: "Answer yes or no only: can you satisfy all current requirements?", consistencyKey: "couple_all_reqs", expectingDirectAnswer: true },
-      { msg: "Final answer in JSON only with keys unit,meets_requirements,notes.", expectingDirectAnswer: true },
+      { msg: "Given everything I’ve asked for now, can you still meet all my requirements?", consistencyKey: "couple_all_reqs", expectingDirectAnswer: true },
+      { msg: "Please wrap up with your recommended unit, whether it meets all requirements, and any caveats I should know.", expectingDirectAnswer: true },
     ],
   },
   {
@@ -255,17 +256,17 @@ const coreSessions = [
     },
     turns: [
       { msg: "I need a place tonight or tomorrow. Solo traveler. Cheapest options?", mustMention: ["available"], expectingDirectAnswer: true },
-      { msg: "Bullet list only: include unit and whether wifi is good.", expectingDirectAnswer: true },
-      { msg: "Dates only. Give me next two possible check-in to check-out ranges.", expectingDirectAnswer: true },
+      { msg: "Can you list a few options and include whether wifi quality is good for each?", expectingDirectAnswer: true },
+      { msg: "What are the next two realistic check-in/check-out ranges I should consider?", expectingDirectAnswer: true },
       { msg: "Remember this: solo, strong wifi required, budget is tight, last-minute only." },
-      { msg: "Yes or no only: do you have anything that matches all that?", consistencyKey: "solo_match", expectingDirectAnswer: true },
+      { msg: "Based on that, do you have anything that actually matches what I need?", consistencyKey: "solo_match", expectingDirectAnswer: true },
       { msg: "Which unit is closest to local attractions and still budget friendly?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "I changed my mind: now I can do next week too. What improves?", mustMention: ["week"], expectingDirectAnswer: true },
-      { msg: "What were my original constraints before next-week change? bullet list only.", memoryMustInclude: ["solo", "wifi", "budget", "last-minute"], expectingDirectAnswer: true },
-      { msg: "JSON only: give top 2 options with fields unit,price_level,why.", expectingDirectAnswer: true },
+      { msg: "Before I said I could do next week, what were my original constraints?", memoryMustInclude: ["solo", "wifi", "budget", "last-minute"], expectingDirectAnswer: true },
+      { msg: "Give me your top 2 options and tell me price level and why each one is a fit.", expectingDirectAnswer: true },
       { msg: "If any earlier response had wrong format, correct it now in one concise line.", mustMention: ["format"], expectingDirectAnswer: true },
       { msg: "Yes/no only: are you confident these options are currently available?", consistencyKey: "solo_confident", expectingDirectAnswer: true },
-      { msg: "Final bullet list only: exact next steps to book.", expectingDirectAnswer: true },
+      { msg: "What are the exact next steps I should take to book quickly?", expectingDirectAnswer: true },
     ],
   },
   {
@@ -279,15 +280,15 @@ const coreSessions = [
       { msg: "We are an extended family of 8 to 10 coming for an event. Which units can handle that size?", mustMention: ["unit"], expectingDirectAnswer: true },
       { msg: "Please include bedroom and bathroom counts for each option.", mustMention: ["bath"], expectingDirectAnswer: true },
       { msg: "Remember these requirements: 8-10 guests, accessibility important, at least one pet-friendly option, multiple bathrooms." },
-      { msg: "JSON only with keys unit,sleeps,bathrooms,pet_friendly,accessibility_notes.", expectingDirectAnswer: true },
-      { msg: "Yes or no only: do you have at least one option meeting all requirements?", consistencyKey: "ext_all", expectingDirectAnswer: true },
-      { msg: "Now give bullet list only of tradeoffs if we prioritize accessibility over pet-friendly.", expectingDirectAnswer: true },
+      { msg: "Can you summarize options with sleeps, bathroom count, pet-friendliness, and accessibility notes?", expectingDirectAnswer: true },
+      { msg: "Do you have at least one option that meets all of these requirements together?", consistencyKey: "ext_all", expectingDirectAnswer: true },
+      { msg: "If we prioritize accessibility over pet-friendly, what tradeoffs should we expect?", expectingDirectAnswer: true },
       { msg: "I am now conflicting: maybe only 6 guests and no pets. What changes?", mustMention: ["change"], expectingDirectAnswer: true },
-      { msg: "What were my original requirements before that conflict? bullet list only.", memoryMustInclude: ["8-10", "accessibility", "pet", "bathroom"], expectingDirectAnswer: true },
-      { msg: "Dates only for two possible 3-night windows in June 2026.", expectingDirectAnswer: true },
+      { msg: "Before that change, what were my original requirements?", memoryMustInclude: ["8-10", "accessibility", "pet", "bathroom"], expectingDirectAnswer: true },
+      { msg: "Can you suggest two possible 3-night windows in June 2026?", expectingDirectAnswer: true },
       { msg: "If you contradicted earlier yes/no, reconcile explicitly in one sentence.", mustMention: ["because"], expectingDirectAnswer: true },
       { msg: "Correct any prior mistake now and keep Amish Country Lodging context explicit.", mustMention: ["amish"], expectingDirectAnswer: true },
-      { msg: "Final JSON only with keys recommended_unit,why,unmet_requirements,next_step.", expectingDirectAnswer: true },
+      { msg: "Please give a final recommendation, why it fits, anything still unmet, and the next step for booking.", expectingDirectAnswer: true },
     ],
   },
 ];
@@ -452,6 +453,24 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
   const turnsPerSession = TURNS_LIMIT > 0 ? TURNS_LIMIT : 12;
   const runSessions = buildRunSessions(requestedSessions, fuzzSeed);
   const versionMeta = resolveVersionMetadata();
+  let serverVersionMeta = {};
+  try {
+    const vr = await fetchWithRetry(VERSION_URL, { method: "GET" }, MAX_RETRIES, REQUEST_TIMEOUT_MS);
+    const vj = await vr.json();
+    serverVersionMeta = {
+      server_code_version: vj?.codeVersion || null,
+      server_intent_model: vj?.intentModel || null,
+      server_answer_model: vj?.answerModel || null,
+      server_llm_first_mode: typeof vj?.llmFirstMode === "boolean" ? vj.llmFirstMode : null,
+    };
+  } catch {
+    serverVersionMeta = {
+      server_code_version: null,
+      server_intent_model: null,
+      server_answer_model: null,
+      server_llm_first_mode: null,
+    };
+  }
   const notes = {
     method: "direct_api_calls",
     mode: BASE_URL.includes("localhost") ? "local_only" : "remote",
@@ -466,6 +485,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
     turns_per_session: turnsPerSession,
     all_turns_enabled: true,
     ...versionMeta,
+    ...serverVersionMeta,
   };
 
   psql(`INSERT INTO chatbot_qa.runs (run_id, target_url, agent_label, notes)
@@ -495,6 +515,7 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
       let transportError = null;
 
       try {
+        let serverCodeVersion = null;
         const resp = await fetchWithRetry(
           CHAT_URL,
           {
@@ -505,8 +526,12 @@ CREATE INDEX IF NOT EXISTS idx_chatbot_qa_all_turns_created_at ON chatbot_qa.all
           MAX_RETRIES,
           REQUEST_TIMEOUT_MS
         );
+        serverCodeVersion = String(resp.headers.get("x-code-version") || "").trim() || null;
         const data = await resp.json();
         replyText = String(data?.reply || "").trim();
+        if (serverCodeVersion && !serverVersionMeta.server_code_version) {
+          serverVersionMeta.server_code_version = serverCodeVersion;
+        }
         if (!replyText) transportError = "Empty reply payload";
       } catch (e) {
         transportError = `Transport failure: ${e.message}`;
