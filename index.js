@@ -244,6 +244,19 @@ function looksLikeSummaryRequest(message) {
   return /\b(tell me about|about|overview|describe|summary)\b/.test(msg);
 }
 
+function hasConcreteListingCue(message) {
+  const msg = String(message || "").toLowerCase();
+  if (
+    /\b(treehouse|cabin|suite|lodge|cottage|unit|listing)\s*#?\s*\d+\b/.test(msg)
+  ) {
+    return true;
+  }
+  if (/\b(red fern|water lily|joy lodge|grace lodge|hope lodge)\b/.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeUserMessage(message) {
   return String(message || "")
     .replace(/\bhottub(s)?\b/gi, "hot tub$1")
@@ -584,6 +597,12 @@ function normalizePlannerOutput(parsed, message, policyIntent) {
     : heuristicIntent(message, policyIntent);
   const confidence = Number(parsed?.confidence ?? 0);
   const guestCount = Number(parsed?.guest_count);
+  const needsClarification = Boolean(parsed?.needs_clarification);
+  const clarificationQuestionRaw = parsed?.clarification_question;
+  const clarificationQuestion =
+    typeof clarificationQuestionRaw === "string" && clarificationQuestionRaw.trim()
+      ? clarificationQuestionRaw.trim()
+      : null;
   return {
     intent,
     scope,
@@ -592,6 +611,8 @@ function normalizePlannerOutput(parsed, message, policyIntent) {
     unit_type: parsed?.unit_type ? String(parsed.unit_type).toLowerCase() : null,
     guest_count: Number.isFinite(guestCount) && guestCount > 0 ? guestCount : null,
     confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
+    needs_clarification: needsClarification,
+    clarification_question: clarificationQuestion,
   };
 }
 
@@ -605,6 +626,8 @@ async function planTurn(message, { sessionHasListing = false } = {}) {
     unit_type: detectUnitType(message),
     guest_count: extractCapacityQuery(message)?.sleeps || null,
     confidence: 0,
+    needs_clarification: false,
+    clarification_question: null,
   };
 
   try {
@@ -620,7 +643,9 @@ async function planTurn(message, { sessionHasListing = false } = {}) {
         "\"policy_topic\":\"pets|smoking|parties|noise|checkin|checkout|cancellation|null\"," +
         "\"unit_type\":\"treehouse|cabin|suite|lodge|cottage|tiny home|null\"," +
         "\"guest_count\":number|null," +
-        "\"confidence\":number" +
+        "\"confidence\":number," +
+        "\"needs_clarification\":boolean," +
+        "\"clarification_question\":string|null" +
         "}. " +
         "Rules: " +
         "1) Broad asks like 'any units', 'which units', capacity-only group asks, and amenity list/filter asks are inventory scope. " +
@@ -713,6 +738,26 @@ function buildValidatedExecutionPlan({ message, planner, classifier, sessionHasL
   const useSessionUnit = Boolean(planner?.use_session_unit) && Boolean(sessionHasListing);
   const guestCount = Number(planner?.guest_count);
   const unitType = planner?.unit_type ? String(planner.unit_type).toLowerCase() : detectUnitType(message);
+  const plannerNeedsClarification = Boolean(planner?.needs_clarification);
+  const plannerClarificationQuestion =
+    typeof planner?.clarification_question === "string" ? planner.clarification_question.trim() : "";
+  const missingCoreSignal =
+    !isAvailabilityQuestion(message) &&
+    !isInventoryAvailabilityQuestion(message) &&
+    !isInventoryQuery(message) &&
+    !Boolean(policyIntent) &&
+    !looksLikeSummaryRequest(message) &&
+    !looksLikeProximityQuery(message) &&
+    !Boolean(detectAmenityQuery(message));
+  const explicitListingCue = hasConcreteListingCue(message);
+  const shouldClarify =
+    (plannerNeedsClarification && !explicitListingCue) ||
+    (lowConfidence && missingCoreSignal && !sessionHasListing && !explicitListingCue);
+  const clarificationQuestion =
+    plannerClarificationQuestion ||
+    (sessionHasListing
+      ? "Do you want me to keep using the same unit, or switch to a different one?"
+      : "Do you want availability, unit details, or a list of matching units?");
 
   return {
     proposedIntent,
@@ -725,6 +770,8 @@ function buildValidatedExecutionPlan({ message, planner, classifier, sessionHasL
     policyIntent,
     unitType: unitType || null,
     guestCount: Number.isFinite(guestCount) && guestCount > 0 ? guestCount : null,
+    shouldClarify,
+    clarificationQuestion,
   };
 }
 
@@ -1379,10 +1426,24 @@ app.post("/chat", async (req, res) => {
       looksLikeFollowupQuestion(userMessage) && session?.lastAmenityKey
         ? session.lastAmenityKey
         : null;
+    const scopedInventoryFromSession =
+      session?.scopeMemory?.kind === "inventory"
+        ? {
+            type: "scoped",
+            amenityKeys: Array.isArray(session.scopeMemory?.filters?.amenityKeys)
+              ? session.scopeMemory.filters.amenityKeys
+              : [],
+            unitType: session.scopeMemory?.filters?.unitType || null,
+            petFriendly: Boolean(session.scopeMemory?.filters?.petFriendly),
+            dates: session.scopeMemory?.dates || null,
+          }
+        : null;
     const followupInventory =
       looksLikeFollowupQuestion(userMessage) && session?.lastInventory
         ? session.lastInventory
-        : null;
+        : looksLikeFollowupQuestion(userMessage)
+          ? scopedInventoryFromSession
+          : null;
     const directBookingRequest = isDirectBookingRequest(normalizedMessage);
     const llmFirstEnabled = String(process.env.LLM_FIRST_MODE || "1") === "1";
     const plan = llmFirstEnabled
@@ -1442,7 +1503,27 @@ app.post("/chat", async (req, res) => {
       setResponseContext(ctx);
       // Persist the resolved route-level intent for follow-up continuity.
       const routedIntent = responseRoute || effectiveIntent || "general";
-      setSession(sessionId, { lastIntent: routedIntent });
+      let nextScopeMemory = session?.scopeMemory || null;
+      if (listingId && !String(routedIntent).includes("inventory")) {
+        nextScopeMemory = {
+          kind: "single_unit",
+          listingId: String(listingId),
+          updatedAt: Date.now(),
+        };
+      } else if (
+        String(routedIntent).includes("inventory") ||
+        routedIntent === "recommendation" ||
+        routedIntent === "inventory_constraints" ||
+        routedIntent === "amenity_inventory"
+      ) {
+        nextScopeMemory = {
+          kind: "inventory",
+          filters: responseInventoryFilters || session?.scopeMemory?.filters || null,
+          dates: responseDates || session?.scopeMemory?.dates || null,
+          updatedAt: Date.now(),
+        };
+      }
+      setSession(sessionId, { lastIntent: routedIntent, scopeMemory: nextScopeMemory });
       const voiced = applyReplyVoice(reply, {
         intent: effectiveIntent,
         policyIntent: policyIntentRaw,
@@ -1515,6 +1596,21 @@ app.post("/chat", async (req, res) => {
     }
     metrics.intents[effectiveIntent] = (metrics.intents[effectiveIntent] || 0) + 1;
     setSession(sessionId, { lastIntent: effectiveIntent });
+    const followupHasContext =
+      looksLikeFollowupQuestion(userMessage) &&
+      Boolean(
+        followupInventory ||
+          followupAmenityKey ||
+          session?.lastInventory ||
+          session?.lastPolicyIntent ||
+          session?.lastIntent === "availability"
+      );
+    if (executionPlan.shouldClarify && !followupHasContext) {
+      return sendReply(executionPlan.clarificationQuestion, {
+        route: "clarification",
+        replyType: "summary",
+      });
+    }
     setDebugHeader("Intent", effectiveIntent);
     logEvent("chat_request", {
       sessionId: sessionId || "anonymous",
@@ -1566,6 +1662,22 @@ app.post("/chat", async (req, res) => {
         listingId = explicitListingId;
         setSession(sessionId, { listingId });
         setDebugHeader("ListingIdEarly", listingId);
+      } else if (looksLikeSummaryRequest(normalizedMessage)) {
+        const fuzzyListingId = findListingIdFromMessage(normalizedMessage, listings);
+        if (fuzzyListingId) {
+          listingId = fuzzyListingId;
+          setSession(sessionId, { listingId });
+          setDebugHeader("ListingIdSummaryFuzzy", listingId);
+        }
+      } else if (
+        looksLikeFollowupQuestion(userMessage) &&
+        session?.scopeMemory?.kind === "single_unit" &&
+        session?.scopeMemory?.listingId &&
+        !isInventoryQuery(normalizedMessage)
+      ) {
+        listingId = String(session.scopeMemory.listingId);
+        setSession(sessionId, { listingId });
+        setDebugHeader("ListingIdFromScopeMemory", listingId);
       }
     }
     const recommendationIntent = detectRecommendationIntent(normalizedMessage);

@@ -980,5 +980,64 @@
     "forbidIncludes": [
       "Book now: Book these dates"
     ]
+  },
+  {
+    "name": "longtail-scope-single-unit-1",
+    "sessionId": "golden-longtail-scope-single-unit",
+    "message": "Tell me about treehouse 3",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "overview"
+    ],
+    "expectMeta": {
+      "route": "summary"
+    },
+    "expectReplyType": "summary"
+  },
+  {
+    "name": "longtail-scope-single-unit-2",
+    "sessionId": "golden-longtail-scope-single-unit",
+    "message": "Does it have a fireplace?",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "fireplace"
+    ],
+    "forbidIncludes": [
+      "Which unit are you asking about?"
+    ],
+    "expectMeta": {
+      "route": "amenity_inventory"
+    },
+    "expectReplyType": "inventory"
+  },
+  {
+    "name": "longtail-scope-inventory-1",
+    "sessionId": "golden-longtail-scope-inventory",
+    "message": "Which units have hot tubs?",
+    "expectOneOfIncludes": [
+      "Units with",
+      "Units that match your request"
+    ],
+    "expectMeta": {
+      "route": "amenity_inventory"
+    },
+    "expectReplyType": "inventory"
+  },
+  {
+    "name": "longtail-scope-inventory-2",
+    "sessionId": "golden-longtail-scope-inventory",
+    "message": "What about next weekend?",
+    "expectOneOfIncludes": [
+      "Available units",
+      "No units are available",
+      "I didn’t find any available"
+    ],
+    "forbidIncludes": [
+      "Which unit are you asking about?"
+    ],
+    "expectMeta": {
+      "route": "inventory_availability"
+    },
+    "expectReplyType": "availability"
   }
 ]

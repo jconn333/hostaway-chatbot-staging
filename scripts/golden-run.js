@@ -32,6 +32,10 @@ const CORE_TESTS = new Set([
   "bug-treehouse-typo-weekend-2",
   "bug-hot-tub-filter-preserve-1",
   "bug-hot-tub-filter-preserve-2",
+  "longtail-scope-single-unit-1",
+  "longtail-scope-single-unit-2",
+  "longtail-scope-inventory-1",
+  "longtail-scope-inventory-2",
 ]);
 
 function sleep(ms) {
