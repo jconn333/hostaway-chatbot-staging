@@ -423,6 +423,20 @@
     "expectRegex": []
   },
   {
+    "name": "deep-treehouse-weekend-5",
+    "sessionId": "golden-deep-treehouse",
+    "message": "How many people does it sleep?",
+    "expectIncludes": [
+      "Treehouse #3"
+    ],
+    "expectOneOfIncludes": [
+      "Sleeps",
+      "sleeps",
+      "guests"
+    ],
+    "expectRegex": []
+  },
+  {
     "name": "deep-policy-chain-1",
     "sessionId": "golden-deep-policy",
     "message": "Do you allow pets?",

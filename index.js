@@ -270,6 +270,13 @@ function detectRecommendationIntent(message) {
   );
 }
 
+function isDirectBookingRequest(message) {
+  const msg = (message || "").toLowerCase();
+  return /\b(book it|book this|book that|reserve it|reserve this|reserve that|book now)\b/.test(
+    msg
+  );
+}
+
 function isInventoryQuery(message) {
   const msg = (message || "").toLowerCase();
   const hasListWords = /\b(which|what|any|show|list)\b/.test(msg);
@@ -280,6 +287,16 @@ function isInventoryQuery(message) {
     msg
   );
   return hasListWords && (hasUnitWords || hasFeatureWords);
+}
+
+function isCapacityFactQuestion(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\bhow many\b.*\b(people|guests?|persons?)\b/.test(msg) ||
+    /\b(people|guests?|persons?)\b.*\b(sleep|sleeps)\b/.test(msg) ||
+    /\bhow many\b.*\b(bedrooms?|bathrooms?|beds?)\b/.test(msg) ||
+    /\b(sleeps?|bedrooms?|bathrooms?|beds?)\b/.test(msg)
+  );
 }
 
 async function classifyIntent(message) {
@@ -892,6 +909,7 @@ app.post("/chat", async (req, res) => {
       looksLikeFollowupQuestion(userMessage) && session?.lastInventory
         ? session.lastInventory
         : null;
+    const directBookingRequest = isDirectBookingRequest(normalizedMessage);
     const intent = await classifyIntent(normalizedMessage);
     const policyIntentRaw = detectPolicyIntent(normalizedMessage);
     const modelIntent = intent.intent || "general";
@@ -938,10 +956,17 @@ app.post("/chat", async (req, res) => {
     });
     setDebugHeader("PolicyIntent", policyIntentRaw);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
+    const capacityFactQuestion = isCapacityFactQuestion(normalizedMessage);
     let inventoryIntent =
       isInventoryQuery(normalizedMessage) ||
       ["inventory_availability", "amenity_inventory", "policy"].includes(effectiveIntent);
     if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(normalizedMessage)) {
+      inventoryIntent = false;
+    }
+    if (session?.listingId && capacityFactQuestion && !looksLikeGenericUnitReference(userMessage)) {
+      inventoryIntent = false;
+    }
+    if (session?.listingId && directBookingRequest) {
       inventoryIntent = false;
     }
     setDebugHeader("InventoryIntent", inventoryIntent);
@@ -1178,6 +1203,17 @@ app.post("/chat", async (req, res) => {
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });
+      } else if (session?.listingId && directBookingRequest) {
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
+      } else if (
+        session?.listingId &&
+        capacityFactQuestion &&
+        !looksLikeGenericUnitReference(userMessage)
+      ) {
+        // Keep unit-level capacity/fact follow-ups pinned to the active session unit.
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
       } else if (session?.listingId && !inventoryIntent) {
         // Only reuse session unit when user implies continuity (e.g., "same/that one")
         // or the message doesn't reference a generic unit category.
