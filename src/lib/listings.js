@@ -4,17 +4,27 @@
    UNIT SUGGESTIONS
 ================================ */
 export function suggestUnits(message, listings) {
-  const msg = (message || "").toLowerCase();
-  const words = msg.split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+  const msg = normalizeForMatch(message || "");
+  const words = msg
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3 || /^\d+$/.test(w));
+  const numericWords = words.filter((w) => /^\d+$/.test(w));
 
   const scored = listings.map((l) => {
-    const hay = `${l.name || ""} ${l.internalListingName || ""} ${
-      l.externalListingName || ""
-    } ${l.airbnbName || ""}`.toLowerCase();
+    const hay = normalizeForMatch(
+      `${l.name || ""} ${l.internalListingName || ""} ${l.externalListingName || ""} ${
+        l.airbnbName || ""
+      }`
+    );
 
     let score = 0;
     for (const w of words) {
       if (hay.includes(w)) score += 1;
+    }
+    for (const n of numericWords) {
+      if (hay.includes(` ${n} `) || hay.endsWith(` ${n}`) || hay.startsWith(`${n} `)) {
+        score += 2;
+      }
     }
 
     return { name: l.name, score };
@@ -44,10 +54,11 @@ export function suggestUnits(message, listings) {
    LISTING NAME MATCHING (supports nicknames)
 ================================ */
 export function findListingIdFromMessage(message, listings) {
-  const msg = (message || "").toLowerCase();
+  const msg = normalizeForMatch(message || "");
   const pluralUnitWords = /\b(cabins|units|suites|lodges|places|properties|rentals|listings)\b/.test(
     msg
   );
+  const msgNumbers = extractNumberTokens(msg);
   const candidates = [];
 
   for (const l of listings) {
@@ -57,9 +68,10 @@ export function findListingIdFromMessage(message, listings) {
       .filter((n) => n.length >= 4);
 
     for (const name of names) {
+      const normalized = normalizeForMatch(name);
       candidates.push({
         id: l.id,
-        nameLower: name.toLowerCase(),
+        nameLower: normalized,
         length: name.length,
       });
     }
@@ -79,8 +91,14 @@ export function findListingIdFromMessage(message, listings) {
 
   // Nickname/partial match: most meaningful words (>=3 chars) present
   for (const c of candidates) {
-    const words = c.nameLower.split(/\s+/).filter((w) => w.length >= 3);
+    const words = c.nameLower
+      .split(/\s+/)
+      .filter((w) => w.length >= 3 || /^\d+$/.test(w));
     if (words.length === 0) continue;
+
+    const hasAnyNumberConstraint =
+      msgNumbers.length > 0 && !msgNumbers.some((n) => words.includes(n));
+    if (hasAnyNumberConstraint) continue;
 
     let hits = 0;
     for (const w of words) {
@@ -88,7 +106,7 @@ export function findListingIdFromMessage(message, listings) {
     }
 
     // Accept if most words match (e.g. "Joy Suite" -> "Joy Lodge Suite")
-    if (hits >= Math.max(2, Math.ceil(words.length * 0.6))) {
+    if (hits >= Math.max(1, Math.ceil(words.length * 0.6))) {
       return c.id;
     }
   }
@@ -97,7 +115,7 @@ export function findListingIdFromMessage(message, listings) {
 }
 
 export function findListingIdFromMessageStrong(message, listings) {
-  const msg = (message || "").toLowerCase();
+  const msg = normalizeForMatch(message || "");
   const candidates = [];
 
   for (const l of listings) {
@@ -109,7 +127,7 @@ export function findListingIdFromMessageStrong(message, listings) {
     for (const name of names) {
       candidates.push({
         id: l.id,
-        nameLower: name.toLowerCase(),
+        nameLower: normalizeForMatch(name),
         length: name.length,
       });
     }
@@ -121,4 +139,19 @@ export function findListingIdFromMessageStrong(message, listings) {
   }
 
   return null;
+}
+
+function normalizeForMatch(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/#/g, " ")
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractNumberTokens(text) {
+  return String(text || "")
+    .split(/\s+/)
+    .filter((w) => /^\d+$/.test(w));
 }

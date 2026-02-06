@@ -482,8 +482,11 @@ export function getSandboxHtml() {
       question.focus();
     });
 
-    document.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") ask();
+    question.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        ask();
+      }
     });
 
     setSending(false);
