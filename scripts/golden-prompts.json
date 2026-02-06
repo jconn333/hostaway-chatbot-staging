@@ -257,5 +257,64 @@
     "message": "Which cabins are available Feb 7 to Feb 9?",
     "expectOneOfIncludes": ["(cabins)", "Available units", "didn’t find any available units", "available cabins"],
     "expectRegex": []
+  },
+  {
+    "name": "deep-treehouse-weekend-1",
+    "sessionId": "golden-deep-treehouse",
+    "message": "Is treehouse 3 available next weekend?",
+    "expectOneOfIncludes": ["Treehouse #3", "Book now:", "already booked", "available"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-treehouse-weekend-2",
+    "sessionId": "golden-deep-treehouse",
+    "message": "Yes how about a weekend in March?",
+    "expectIncludes": ["Treehouse #3"],
+    "expectOneOfIncludes": ["Available weekends in March", "couldn’t find an available weekend in March"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-treehouse-weekend-3",
+    "sessionId": "golden-deep-treehouse",
+    "message": "Does it have a hot tub?",
+    "expectIncludes": ["Treehouse #3"],
+    "expectOneOfIncludes": ["hot tub", "does not have", "doesn't have"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-treehouse-weekend-4",
+    "sessionId": "golden-deep-treehouse",
+    "message": "What time is check in?",
+    "expectOneOfIncludes": ["Check‑in", "Check-in"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-policy-chain-1",
+    "sessionId": "golden-deep-policy",
+    "message": "Do you allow pets?",
+    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets are allowed"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-policy-chain-2",
+    "sessionId": "golden-deep-policy",
+    "message": "Which ones allow pets?",
+    "expectOneOfIncludes": ["Pet‑friendly units:", "Pet-friendly units:"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-policy-chain-3",
+    "sessionId": "golden-deep-policy",
+    "message": "What about Joy Lodge Suite?",
+    "expectIncludes": ["Joy Lodge Suite"],
+    "expectOneOfIncludes": ["pets", "Pet", "Book now:"],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-policy-chain-4",
+    "sessionId": "golden-deep-policy",
+    "message": "And smoking?",
+    "expectOneOfIncludes": ["smoking", "non‑smoking", "non-smoking", "no smoking"],
+    "expectRegex": []
   }
 ]

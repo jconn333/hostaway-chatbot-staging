@@ -29,6 +29,9 @@
 - Reuse prior dates (`what about that?`)
 - Reuse prior listing (`and checkout?`)
 - Disambiguation then resolve (`Joy Lodge Suite`)
+- Deep 3-4 turn chains in one session:
+  - availability -> month-weekend follow-up -> amenity -> check-in time
+  - generic pet policy -> pet-friendly list -> named unit follow-up -> smoking follow-up
 
 ## Monitoring
 - `GET /healthz`

@@ -125,6 +125,37 @@ function looksLikeGenericUnitReference(message) {
   return /\b(cabin|unit|suite|lodge|place|property|rental|listing)\b/.test(msg);
 }
 
+function looksLikeInventoryWidePolicyRequest(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\b(which|what|list|show|any)\b/.test(msg) &&
+    /\b(units|cabins|suites|lodges|properties|listings|ones)\b/.test(msg)
+  );
+}
+
+function personalizePolicyReply(policyReply, safe, policyIntent) {
+  const name = safe?.name || "This unit";
+  if (!policyReply) return policyReply;
+
+  if (policyIntent === "pets") {
+    if (/pets are allowed/i.test(policyReply)) {
+      return `Yes — ${name} is pet-friendly (pets are allowed).`;
+    }
+    if (/pets aren[’']t allowed|pets are not allowed/i.test(policyReply)) {
+      return `No — ${name} is not pet-friendly (pets are not allowed).`;
+    }
+  }
+
+  if (policyIntent === "checkin") {
+    return policyReply.replace(/^Check.?in is/i, `Check-in for ${name} is`);
+  }
+  if (policyIntent === "checkout") {
+    return policyReply.replace(/^Check.?out is/i, `Check-out for ${name} is`);
+  }
+
+  return policyReply.replace(/this property/gi, name);
+}
+
 function looksLikeProximityQuery(message) {
   const msg = (message || "").toLowerCase();
   return /\b(close|near|nearby|distance|far|how far|proximity)\b/.test(msg);
@@ -1146,10 +1177,7 @@ app.post("/chat", async (req, res) => {
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });
-      } else if (
-        session?.listingId &&
-        !inventoryIntent
-      ) {
+      } else if (session?.listingId && !inventoryIntent) {
         // Only reuse session unit when user implies continuity (e.g., "same/that one")
         // or the message doesn't reference a generic unit category.
         if (
@@ -1159,6 +1187,14 @@ app.post("/chat", async (req, res) => {
           listingId = session.listingId;
           memoryNote = "\n\n(Using your last unit from this session.)";
         }
+      } else if (
+        session?.listingId &&
+        policyIntentRaw &&
+        !looksLikeInventoryWidePolicyRequest(normalizedMessage)
+      ) {
+        // Policy/time follow-ups ("what time is check in?") should stay on current unit.
+        listingId = session.listingId;
+        memoryNote = "\n\n(Using your last unit from this session.)";
       } else if (
         session?.listingId &&
         looksLikeFollowupQuestion(userMessage) &&
@@ -1795,6 +1831,7 @@ app.post("/chat", async (req, res) => {
       const fromFacts = policyAnswerFromFacts(safe, policyIntent);
       const policyReply = fromRules || fromFacts;
       if (policyReply) {
+        const policyReplyScoped = personalizePolicyReply(policyReply, safe, policyIntent);
         const evidenceSource = fromRules ? "listing house rules/tags/public fields" : "listing check-in/out facts";
         const evidenceLine = wantsEvidenceLine(normalizedMessage)
           ? buildEvidenceLine({ confidence: "high", source: evidenceSource })
@@ -1810,7 +1847,7 @@ app.post("/chat", async (req, res) => {
         });
         respond(
           appendFollowupIfMissing(
-            policyReply + bookingLine + evidenceLine + memoryNote,
+            policyReplyScoped + bookingLine + evidenceLine + memoryNote,
             "Want me to check a different unit?"
           )
         );
