@@ -16,6 +16,7 @@ function parseArgs(argv) {
     count: Number(process.env.GOLDEN_FUZZ_COUNT || 50),
     minTurns: Number(process.env.GOLDEN_FUZZ_MIN_TURNS || 8),
     maxTurns: Number(process.env.GOLDEN_FUZZ_MAX_TURNS || 12),
+    reportPath: process.env.GOLDEN_FUZZ_REPORT_PATH || "",
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -24,6 +25,7 @@ function parseArgs(argv) {
     if (a === "--count" && b) out.count = Number(b);
     if (a === "--min-turns" && b) out.minTurns = Number(b);
     if (a === "--max-turns" && b) out.maxTurns = Number(b);
+    if (a === "--report" && b) out.reportPath = String(b);
   }
   if (!Number.isFinite(out.seed)) out.seed = Date.now();
   if (!Number.isFinite(out.count) || out.count < 1) out.count = 50;
@@ -206,7 +208,7 @@ async function run() {
   }
 
   await mkdir("tmp", { recursive: true });
-  const outPath = `tmp/golden-fuzz-failures-${opts.seed}.json`;
+  const outPath = opts.reportPath || `tmp/golden-fuzz-failures-${opts.seed}.json`;
   await writeFile(
     outPath,
     JSON.stringify(

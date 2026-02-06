@@ -27,6 +27,24 @@ jobs:
       - run: npm run golden:core
       - run: npm run golden:bugs
 
+  premerge-main:
+    if: github.event_name == 'pull_request'
+    needs: core
+    runs-on: ubuntu-latest
+    env:
+      HOSTAWAY_ACCOUNT_ID: ${{ secrets.HOSTAWAY_ACCOUNT_ID }}
+      HOSTAWAY_API_KEY: ${{ secrets.HOSTAWAY_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ENABLE_TEST_MODE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run golden:all
+      - run: npm run golden:oracle
+
   full-nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -42,11 +60,23 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
+      - name: Set fuzz report vars
+        run: |
+          echo "FUZZ_SEED=${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "FUZZ_REPORT=tmp/golden-fuzz-failures-${GITHUB_RUN_NUMBER}.json" >> "$GITHUB_ENV"
       - run: npm test
       - run: npm run golden:all
       - run: npm run golden:oracle
-      - run: npm run golden:fuzz -- --count 200 --seed ${{ github.run_number }}
+      - run: npm run golden:fuzz -- --count 200 --seed "$FUZZ_SEED" --report "$FUZZ_REPORT"
       - run: npm run monitor:synthetic
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-fuzz-report-${{ github.run_number }}
+          path: |
+            ${{ env.FUZZ_REPORT }}
+            tmp/golden-fuzz-failures-*.json
+          if-no-files-found: warn
       - if: failure() && env.SLACK_WEBHOOK_URL != ''
         run: |
-          node scripts/slack-post.js "Nightly reliability checks failed for ${GITHUB_REPOSITORY} run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Check golden:fuzz report artifacts/logs for seed and transcript details."
+          node scripts/slack-post.js "Nightly reliability checks failed for ${GITHUB_REPOSITORY}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID} Seed: ${FUZZ_SEED} Report: ${FUZZ_REPORT}"
