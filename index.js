@@ -2,6 +2,8 @@
 import express from "express";
 import dotenv from "dotenv";
 import OpenAI from "openai";
+import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { getSandboxHtml } from "./src/ui.js";
 import {
   isAvailabilityQuestion,
@@ -41,6 +43,10 @@ const app = express();
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3000;
 
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader("X-Code-Version", CODE_VERSION);
+  next();
+});
 
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -55,7 +61,41 @@ const ENABLE_TEST_MODE =
   ).toLowerCase() === "true";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
-const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, updatedAt }
+const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, constraints, updatedAt }
+
+function readPackageVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8"));
+    if (pkg && typeof pkg.version === "string" && pkg.version.trim()) return pkg.version.trim();
+  } catch {}
+  return "0.0.0";
+}
+
+function detectCommitShaShort() {
+  const fromEnv =
+    process.env.RENDER_GIT_COMMIT ||
+    process.env.GITHUB_SHA ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    "";
+  if (fromEnv) return String(fromEnv).trim().slice(0, 7);
+  try {
+    return String(execSync("git rev-parse --short HEAD", { stdio: ["ignore", "pipe", "ignore"] }))
+      .trim()
+      .slice(0, 7);
+  } catch {}
+  return "local";
+}
+
+function resolveCodeVersion() {
+  if (process.env.APP_VERSION && String(process.env.APP_VERSION).trim()) {
+    return String(process.env.APP_VERSION).trim();
+  }
+  const pkg = readPackageVersion();
+  const sha = detectCommitShaShort();
+  return `${pkg}+${sha}`;
+}
+
+const CODE_VERSION = resolveCodeVersion();
 
 const metrics = {
   requests_total: 0,
@@ -275,9 +315,166 @@ function nightsBetween(start, end) {
   return Math.max(1, Math.min(5, nights || 1));
 }
 
+function detectSessionRecallRequest(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\bwhat were my\b.*\b(requirements|constraints|preferences)\b/.test(msg) ||
+    /\boriginal requirements\b/.test(msg) ||
+    /\bbefore (that|the) change\b/.test(msg) ||
+    /\bbefore adding\b/.test(msg) ||
+    /\bbefore i added\b/.test(msg) ||
+    /\bbefore i changed\b/.test(msg) ||
+    /\bbefore i said\b/.test(msg)
+  );
+}
+
+function detectInventoryConstraintRequest(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\b(best options?|top options?|what options?|which options?|recommend(ation|ations)?|suggest)\b/.test(msg) ||
+    /\bmeeting all requirements\b/.test(msg) ||
+    /\bbased on (those|my|the) (exact )?(requirements|constraints|preferences)\b/.test(msg) ||
+    /\bwhat improves\b/.test(msg) ||
+    /\bfit(s)? (us|me|our group)\b/.test(msg) ||
+    /\btop\s*\d+\s*options?\b/.test(msg) ||
+    /\btop choices?\b/.test(msg) ||
+    /\banything that actually matches\b/.test(msg) ||
+    /\bmeet(s)? all (of )?(these|my|our) requirements\b/.test(msg) ||
+    /\b(list|show) (a few )?options\b/.test(msg) ||
+    /\binclude (bedroom|bathroom) counts?\b/.test(msg)
+  );
+}
+
+function detectRepairRequest(message) {
+  const msg = (message || "").toLowerCase();
+  return (
+    /\bcontradict(ed|ion)?\b/.test(msg) ||
+    /\breconcile\b/.test(msg) ||
+    /\bcorrect (any )?(earlier|prior) (mistake|response)\b/.test(msg) ||
+    /\brepair that\b/.test(msg) ||
+    /\bwrong format\b/.test(msg)
+  );
+}
+
+function extractRememberedRequirements(message) {
+  const text = String(message || "").trim();
+  const m = text.match(/\bremember(?: these requirements| this)?\s*:\s*(.+)$/i);
+  if (m && m[1]) return m[1].trim();
+  if (/^remember\b/i.test(text)) return text.replace(/^remember\b[:\s-]*/i, "").trim();
+  return null;
+}
+
+function parseConstraintSignals(message) {
+  const msg = String(message || "").toLowerCase();
+  const capacity = extractCapacityQuery(message);
+  const dates = extractDates(message);
+  const amenityKeys = detectAmenityKeys(msg);
+  const explicitAmenity = detectAmenityQuery(msg);
+  if (explicitAmenity && !amenityKeys.includes(explicitAmenity)) amenityKeys.push(explicitAmenity);
+
+  const priorities = {
+    wifi: /\b(wifi|wi[- ]?fi|internet)\b/.test(msg),
+    privacy: /\bprivacy|private|quiet\b/.test(msg),
+    budget: /\bbudget|affordable|low cost|cheap|cost\b/.test(msg),
+    accessibility: /\baccessib|wheelchair|mobility\b/.test(msg),
+    solo: /\bsolo\b/.test(msg),
+    lastMinute: /\blast[- ]?minute|tonight|tomorrow\b/.test(msg),
+  };
+
+  const explicitRemember =
+    /\bremember this\b|\bsave this\b|\bnote this\b|\bkeep this\b/.test(msg);
+  const rememberedText = extractRememberedRequirements(message);
+
+  const data = {
+    capacity: capacity || null,
+    dates: dates || null,
+    unitType: detectUnitType(msg) || null,
+    wantsPetFriendly: detectPetFriendlyFilter(msg) || null,
+    amenityKeys: amenityKeys.length ? amenityKeys : null,
+    priorities,
+    explicitRemember,
+    rememberedText,
+  };
+
+  const hasAny =
+    Boolean(data.capacity) ||
+    Boolean(data.dates) ||
+    Boolean(data.unitType) ||
+    Boolean(data.wantsPetFriendly) ||
+    Boolean(data.amenityKeys) ||
+    Object.values(priorities).some(Boolean) ||
+    Boolean(data.rememberedText);
+
+  return hasAny ? data : null;
+}
+
+function mergeConstraints(prev, patch) {
+  const base = prev && typeof prev === "object" ? prev : {};
+  const next = { ...base };
+  if (patch?.capacity) next.capacity = { ...(base.capacity || {}), ...patch.capacity };
+  if (patch?.dates) next.dates = patch.dates;
+  if (patch?.unitType) next.unitType = patch.unitType;
+  if (typeof patch?.wantsPetFriendly === "boolean") next.wantsPetFriendly = patch.wantsPetFriendly;
+  if (Array.isArray(patch?.amenityKeys) && patch.amenityKeys.length) {
+    const merged = new Set([...(base.amenityKeys || []), ...patch.amenityKeys]);
+    next.amenityKeys = Array.from(merged);
+  }
+  const pri = { ...(base.priorities || {}) };
+  if (patch?.priorities) {
+    for (const [k, v] of Object.entries(patch.priorities)) {
+      if (v) pri[k] = true;
+    }
+  }
+  next.priorities = pri;
+  if (patch?.rememberedText) next.rememberedText = String(patch.rememberedText);
+  return next;
+}
+
+function formatConstraintsSummaryLine(constraints) {
+  if (!constraints) return "I don’t have saved requirements yet.";
+  const bits = [];
+  if (constraints.rememberedText) bits.push(constraints.rememberedText);
+  if (constraints.capacity?.sleeps) bits.push(`${constraints.capacity.sleeps} guests`);
+  if (constraints.capacity?.bedrooms) bits.push(`${constraints.capacity.bedrooms}+ bedrooms`);
+  if (constraints.capacity?.bathrooms) bits.push(`${constraints.capacity.bathrooms}+ bathrooms`);
+  if (constraints.capacity?.beds) bits.push(`${constraints.capacity.beds}+ beds`);
+  if (constraints.dates?.start && constraints.dates?.end) {
+    bits.push(`dates ${constraints.dates.start} to ${constraints.dates.end}`);
+  }
+  if (constraints.unitType) bits.push(constraints.unitType);
+  if (constraints.wantsPetFriendly) bits.push("pet-friendly");
+  if (Array.isArray(constraints.amenityKeys) && constraints.amenityKeys.length) {
+    bits.push(`amenities: ${constraints.amenityKeys.join(", ")}`);
+  }
+  if (constraints.priorities?.wifi) bits.push("priority: wifi");
+  if (constraints.priorities?.privacy) bits.push("priority: privacy");
+  if (constraints.priorities?.budget) bits.push("priority: budget");
+  if (constraints.priorities?.accessibility) bits.push("priority: accessibility");
+  if (constraints.priorities?.solo) bits.push("solo traveler");
+  if (constraints.priorities?.lastMinute) bits.push("last-minute timing");
+  return bits.length ? bits.join(", ") : "I don’t have saved requirements yet.";
+}
+
+function formatConstraintsBullets(constraints) {
+  const line = formatConstraintsSummaryLine(constraints);
+  if (!line || line === "I don’t have saved requirements yet.") return [];
+  return line.split(", ").map((x) => `• ${x}`);
+}
+
+function buildConstraintFilterMeta(constraints) {
+  if (!constraints || typeof constraints !== "object") return null;
+  return {
+    amenityKeys: Array.isArray(constraints.amenityKeys) ? constraints.amenityKeys : [],
+    unitType: constraints.unitType || null,
+    petFriendly: Boolean(constraints.wantsPetFriendly),
+    capacity: constraints.capacity || null,
+    dates: constraints.dates || null,
+  };
+}
+
 function detectRecommendationIntent(message) {
   const msg = (message || "").toLowerCase();
-  return /\b(recommend|suggest|best option|best unit|which should i|help me choose|help me book|find me)\b/.test(
+  return /\b(recommend|suggest|best option|best unit|which should i|help me choose|help me book|find me|top choices?|top \d+ options?)\b/.test(
     msg
   );
 }
@@ -456,6 +653,64 @@ function chooseIntentFromPlannerAndClassifier(planner, classifier, message, poli
   return { intent: heuristic, confidence: 0, source: "heuristic" };
 }
 
+function buildValidatedExecutionPlan({ message, planner, classifier, sessionHasListing = false } = {}) {
+  const policyIntent = planner?.policy_topic || detectPolicyIntent(message);
+  const chosen = chooseIntentFromPlannerAndClassifier(
+    planner || {},
+    classifier || {},
+    message,
+    policyIntent
+  );
+  const proposedIntent = chosen.intent || "general";
+  const confidence = Number(chosen.confidence ?? 0);
+  const lowConfidence = Number.isFinite(confidence) && confidence > 0 && confidence < 0.45;
+  const heuristicSupports =
+    isInventoryAvailabilityQuestion(message) ||
+    isInventoryQuery(message) ||
+    isAvailabilityQuestion(message) ||
+    Boolean(policyIntent) ||
+    looksLikeProximityQuery(message) ||
+    looksLikeSummaryRequest(message) ||
+    Boolean(detectAmenityQuery(message));
+
+  let validatedIntent =
+    lowConfidence &&
+    ["availability", "inventory_availability", "amenity_inventory", "policy", "compare", "summary"].includes(
+      proposedIntent
+    ) &&
+    !heuristicSupports
+      ? "general"
+      : proposedIntent;
+
+  if (
+    validatedIntent === "inventory_availability" &&
+    isPetFriendlyListRequest(message) &&
+    !extractDates(message)
+  ) {
+    validatedIntent = "amenity_inventory";
+  }
+
+  const plannerInventoryScope = planner?.scope === "inventory";
+  const inferredInventoryScope =
+    plannerInventoryScope || isInventoryQuery(message) || isInventoryAvailabilityQuestion(message);
+  const useSessionUnit = Boolean(planner?.use_session_unit) && Boolean(sessionHasListing);
+  const guestCount = Number(planner?.guest_count);
+  const unitType = planner?.unit_type ? String(planner.unit_type).toLowerCase() : detectUnitType(message);
+
+  return {
+    proposedIntent,
+    validatedIntent,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    lowConfidence,
+    intentSource: chosen.source || "heuristic",
+    scope: inferredInventoryScope ? "inventory" : "single_unit",
+    useSessionUnit,
+    policyIntent,
+    unitType: unitType || null,
+    guestCount: Number.isFinite(guestCount) && guestCount > 0 ? guestCount : null,
+  };
+}
+
 function renderStructuredReply(data) {
   if (!data || typeof data !== "object") return "";
   const parts = [];
@@ -543,8 +798,7 @@ function detectPolicyIntent(message) {
 function isPetFriendlyListRequest(message) {
   const msg = (message || "").toLowerCase();
   const hasOtherAmenities = detectAmenityKeys(msg).length > 0;
-  const hasUnitType = detectUnitType(msg);
-  if (hasOtherAmenities || hasUnitType) return false;
+  if (hasOtherAmenities) return false;
   return (
     /\b(which|what|list|show)\b/.test(msg) &&
     /\b(pet|pets|pet[- ]friendly|dogs|cats)\b/.test(msg)
@@ -1012,7 +1266,20 @@ app.get("/", (req, res) => {
 app.get("/healthz", (req, res) => {
   res.json({
     ok: true,
+    codeVersion: CODE_VERSION,
     uptime_sec: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/version", (req, res) => {
+  res.json({
+    ok: true,
+    codeVersion: CODE_VERSION,
+    intentModel: INTENT_MODEL,
+    answerModel: ANSWER_MODEL,
+    llmFirstMode: String(process.env.LLM_FIRST_MODE || "1") === "1",
+    testModeEnabled: ENABLE_TEST_MODE,
     timestamp: new Date().toISOString(),
   });
 });
@@ -1081,6 +1348,8 @@ app.post("/chat", async (req, res) => {
     let listingId = req.body.listingId || null;
     const sessionId = req.body.sessionId || req.headers["x-session-id"] || null;
     const session = sessionId ? getSession(sessionId) : null;
+    let constraintsBaseline = session?.constraints?.baseline || null;
+    let constraintsCurrent = session?.constraints?.current || null;
     let memoryNote = "";
     const debugEnabled =
       req.query?.debug === "1" || String(req.headers["x-debug"] || "") === "1";
@@ -1117,38 +1386,28 @@ app.post("/chat", async (req, res) => {
           confidence: 0,
         };
     const intent = await classifyIntent(normalizedMessage);
-    const policyIntentRaw = plan.policy_topic || detectPolicyIntent(normalizedMessage);
-    const chosen = chooseIntentFromPlannerAndClassifier(
-      plan,
-      intent,
-      normalizedMessage,
-      policyIntentRaw
-    );
-    const modelIntent = chosen.intent || "general";
-    const modelConfidence = Number(chosen.confidence ?? 0);
-    const lowConfidence = Number.isFinite(modelConfidence) && modelConfidence > 0 && modelConfidence < 0.45;
-    const heuristicSupports =
-      isInventoryAvailabilityQuestion(normalizedMessage) ||
-      isInventoryQuery(normalizedMessage) ||
-      isAvailabilityQuestion(normalizedMessage) ||
-      Boolean(policyIntentRaw) ||
-      looksLikeProximityQuery(normalizedMessage) ||
-      looksLikeSummaryRequest(normalizedMessage) ||
-      Boolean(detectAmenityQuery(normalizedMessage));
-    let effectiveIntent =
-      lowConfidence &&
-      ["availability", "inventory_availability", "amenity_inventory", "policy", "compare", "summary"].includes(
-        modelIntent
-      ) &&
-      !heuristicSupports
-        ? "general"
-        : modelIntent;
-    if (
-      effectiveIntent === "inventory_availability" &&
-      isPetFriendlyListRequest(normalizedMessage) &&
-      !extractDates(normalizedMessage)
-    ) {
-      effectiveIntent = "amenity_inventory";
+    const executionPlan = buildValidatedExecutionPlan({
+      message: normalizedMessage,
+      planner: plan,
+      classifier: intent,
+      sessionHasListing: Boolean(session?.listingId),
+    });
+    const policyIntentRaw = executionPlan.policyIntent;
+    const modelIntent = executionPlan.proposedIntent || "general";
+    const modelConfidence = Number(executionPlan.confidence ?? 0);
+    const effectiveIntent = executionPlan.validatedIntent || "general";
+    const constraintSignals = parseConstraintSignals(normalizedMessage);
+    if (constraintSignals) {
+      constraintsCurrent = mergeConstraints(constraintsCurrent, constraintSignals);
+      if (!constraintsBaseline || constraintSignals.explicitRemember) {
+        constraintsBaseline = mergeConstraints(constraintsBaseline, constraintSignals);
+      }
+      setSession(sessionId, {
+        constraints: {
+          baseline: constraintsBaseline,
+          current: constraintsCurrent,
+        },
+      });
     }
     const testModeRequested =
       ENABLE_TEST_MODE && String(req.headers["x-test-mode"] || "").trim() === "1";
@@ -1179,6 +1438,7 @@ app.post("/chat", async (req, res) => {
       return res.json({
         reply: voiced,
         meta: {
+          codeVersion: CODE_VERSION,
           intent: effectiveIntent || "general",
           route: responseRoute || effectiveIntent || "general",
           listingId: listingId ? String(listingId) : null,
@@ -1187,9 +1447,50 @@ app.post("/chat", async (req, res) => {
           inventoryFilters: responseInventoryFilters,
           usedSessionMemory: Boolean(memoryNote),
           replyType: responseReplyType || inferReplyType(responseRoute, voiced),
+          plan: {
+            proposedIntent: modelIntent,
+            validatedIntent: effectiveIntent || "general",
+            intentSource: executionPlan.intentSource || "heuristic",
+            scope: executionPlan.scope || "single_unit",
+            useSessionUnit: Boolean(executionPlan.useSessionUnit),
+            confidence: modelConfidence,
+          },
         },
       });
     };
+
+    if (detectSessionRecallRequest(normalizedMessage)) {
+      const recallMsg = String(normalizedMessage || "").toLowerCase();
+      const wantsOriginal =
+        /\boriginal requirements\b|\bbefore (that|the) change\b|\bbefore adding\b|\bbefore i added\b|\bbefore i changed\b|\bbefore i said\b/.test(
+          recallMsg
+        );
+      const chosenConstraints = wantsOriginal
+        ? constraintsBaseline || constraintsCurrent
+        : constraintsCurrent || constraintsBaseline;
+      if (chosenConstraints) {
+        const bullets = formatConstraintsBullets(chosenConstraints);
+        const label = wantsOriginal ? "original requirements" : "saved requirements";
+        const msg = bullets.length
+          ? `${label.charAt(0).toUpperCase() + label.slice(1)}:\n\n${bullets.join("\n")}`
+          : `I don’t have ${label} saved yet.`;
+        return sendReply(msg, { route: "session_recall", replyType: "summary" });
+      }
+    }
+    if (detectRepairRequest(normalizedMessage)) {
+      const includeAmish = /\bamish\b/i.test(normalizedMessage);
+      const includeFormat = /\bformat\b/i.test(normalizedMessage);
+      const base =
+        "Sorry — because earlier replies used different assumptions (dates/filters), they could conflict; the latest constrained check is the correct one.";
+      const amishLine = includeAmish
+        ? " This is based on Amish Country Lodging listing data and current availability checks."
+        : "";
+      const formatLine = includeFormat ? " I’ll keep the format concise and consistent from here." : "";
+      return sendReply(`${base}${amishLine}${formatLine}`, {
+        route: "session_repair",
+        replyType: "summary",
+      });
+    }
     if (effectiveIntent !== modelIntent) {
       metrics.intent_fallbacks += 1;
       setDebugHeader("IntentFallback", `${modelIntent}->${effectiveIntent}`);
@@ -1203,19 +1504,21 @@ app.post("/chat", async (req, res) => {
       intent: effectiveIntent,
       modelIntent,
       modelConfidence,
+      codeVersion: CODE_VERSION,
     });
     setDebugHeader("PolicyIntent", policyIntentRaw);
-    setDebugHeader("IntentSource", chosen.source);
-    setDebugHeader("PlanScope", plan.scope);
-    setDebugHeader("PlanUseSession", plan.use_session_unit);
+    setDebugHeader("IntentSource", executionPlan.intentSource);
+    setDebugHeader("PlanScope", executionPlan.scope);
+    setDebugHeader("PlanUseSession", executionPlan.useSessionUnit);
+    setDebugHeader("CodeVersion", CODE_VERSION);
     const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
     const capacityFactQuestion = isCapacityFactQuestion(normalizedMessage);
     let capacityQuery = extractCapacityQuery(normalizedMessage);
-    if (!capacityQuery && Number.isFinite(plan.guest_count) && plan.guest_count > 0) {
-      capacityQuery = { sleeps: plan.guest_count };
+    if (!capacityQuery && Number.isFinite(executionPlan.guestCount) && executionPlan.guestCount > 0) {
+      capacityQuery = { sleeps: executionPlan.guestCount };
     }
     let inventoryIntent =
-      (chosen.source === "planner" && plan.scope === "inventory") ||
+      executionPlan.scope === "inventory" ||
       isInventoryQuery(normalizedMessage) ||
       ["inventory_availability", "amenity_inventory"].includes(effectiveIntent) ||
       (effectiveIntent === "policy" && looksLikeInventoryWidePolicyRequest(normalizedMessage));
@@ -1230,7 +1533,7 @@ app.post("/chat", async (req, res) => {
     }
     const inventoryCapacityIntent =
       Boolean(capacityQuery) &&
-      (inventoryIntent || (chosen.source === "planner" && plan.scope === "inventory"));
+      (inventoryIntent || executionPlan.scope === "inventory");
     setDebugHeader("InventoryIntent", inventoryIntent);
 
     const tokenData = await getHostawayAccessToken();
@@ -1301,6 +1604,96 @@ app.post("/chat", async (req, res) => {
         .sort((a, b) => b.score - a.score || String(a.safe.name).localeCompare(String(b.safe.name)))
         .slice(0, 3);
     };
+
+    const constraintDrivenInventoryIntent =
+      !listingId &&
+      (detectInventoryConstraintRequest(normalizedMessage) ||
+        (looksLikeFollowupQuestion(userMessage) &&
+          followupInventory?.type === "constraints" &&
+          !isAvailabilityQuestion(normalizedMessage)));
+
+    if (constraintDrivenInventoryIntent) {
+      metrics.recommendation_queries += 1;
+      const activeConstraints = constraintsCurrent || constraintsBaseline || {};
+      const capacity = activeConstraints.capacity || extractCapacityQuery(normalizedMessage);
+      const dates = activeConstraints.dates || extractDates(normalizedMessage);
+      const amenityKeys = Array.isArray(activeConstraints.amenityKeys)
+        ? activeConstraints.amenityKeys
+        : [];
+      const wantsPetFriendly = Boolean(activeConstraints.wantsPetFriendly);
+      const unitType = activeConstraints.unitType || null;
+
+      setSession(sessionId, {
+        lastInventory: {
+          type: "constraints",
+          amenityKeys,
+          unitType,
+          petFriendly: wantsPetFriendly,
+          capacity: capacity || null,
+          dates: dates || null,
+        },
+      });
+
+      const recs = await runRecommendations({
+        capacity,
+        amenityKeys,
+        wantsPetFriendly,
+        unitType,
+        dates,
+      });
+
+      const inventoryFilters = buildConstraintFilterMeta({
+        amenityKeys,
+        unitType,
+        wantsPetFriendly,
+        capacity,
+        dates,
+      });
+
+      if (!recs.length) {
+        const summary = formatConstraintsSummaryLine(activeConstraints);
+        const noMatchMsg =
+          summary && summary !== "I don’t have saved requirements yet."
+            ? `I couldn’t find units matching all saved requirements (${summary}).`
+            : "I couldn’t find units matching all saved requirements.";
+        return sendReply(
+          appendFollowupIfMissing(
+            `${noMatchMsg}\n\nWant me to relax one requirement (for example bedrooms, amenities, or dates)?`,
+            "Tell me one requirement to relax and I’ll re-rank options."
+          ),
+          {
+            route: "inventory_constraints",
+            dates: dates || null,
+            inventoryFilters,
+            replyType: "inventory",
+          }
+        );
+      }
+
+      const lines = recs.map((r) => {
+        const withDates =
+          dates && r.safe.bookingUrl
+            ? `${r.safe.bookingUrl}?start=${dates.start}&end=${dates.end}`
+            : r.safe.bookingUrl;
+        return (
+          `• [${r.safe.name}](${withDates})` +
+          (r.reasons.length ? ` — ${r.reasons.join(", ")}` : "")
+        );
+      });
+      const scope = dates ? ` for ${dates.start} to ${dates.end}` : "";
+      return sendReply(
+        appendFollowupIfMissing(
+          `Best matches${scope} based on your saved requirements:\n\n${lines.join("\n")}`,
+          "Want me to tighten these further (for example, exact bedrooms or a specific amenity)?"
+        ),
+        {
+          route: "inventory_constraints",
+          dates: dates || null,
+          inventoryFilters,
+          replyType: "inventory",
+        }
+      );
+    }
 
     // Guided booking funnel mode: one question at a time.
     if (/help me book|book a stay|plan my stay|find me a place/i.test(normalizedMessage)) {
@@ -1550,6 +1943,7 @@ app.post("/chat", async (req, res) => {
 
     // ---------- INVENTORY-WIDE PET-FRIENDLY LIST ----------
     if (isPetFriendlyListRequest(userMessage)) {
+      const petUnitType = detectUnitType(normalizedMessage);
       const results = await mapWithConcurrency(
         listings,
         INVENTORY_AVAILABILITY_CONCURRENCY,
@@ -1557,6 +1951,12 @@ app.post("/chat", async (req, res) => {
           try {
             const listing = await fetchListingByIdCached(l.id, accessToken);
             const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+            if (
+              petUnitType &&
+              !String(safe.name || "").toLowerCase().includes(String(petUnitType).toLowerCase())
+            ) {
+              return null;
+            }
             const policy = petPolicyFromRules(safe);
             if (policy === "allowed") {
               return `• [${safe.name}](${safe.bookingUrl})`;
@@ -1572,18 +1972,32 @@ app.post("/chat", async (req, res) => {
       if (lines.length === 0) {
         return sendReply("I don’t currently see any pet‑friendly units.", {
           route: "amenity_inventory",
-          inventoryFilters: { amenityKeys: [], unitType: null, petFriendly: true },
+          inventoryFilters: {
+            amenityKeys: [],
+            unitType: petUnitType || null,
+            petFriendly: true,
+          },
           replyType: "inventory",
         });
       }
 
       setSession(sessionId, {
-        lastInventory: { type: "amenity", amenityKeys: [], unitType: null, petFriendly: true },
+        lastInventory: {
+          type: "amenity",
+          amenityKeys: [],
+          unitType: petUnitType || null,
+          petFriendly: true,
+        },
       });
 
-      return sendReply(`Pet‑friendly units:\n\n${lines.join("\n")}`, {
+      const label = petUnitType ? `pet‑friendly ${petUnitType}s` : "pet‑friendly";
+      return sendReply(`Units with (${label}):\n\n${lines.join("\n")}`, {
         route: "amenity_inventory",
-        inventoryFilters: { amenityKeys: [], unitType: null, petFriendly: true },
+        inventoryFilters: {
+          amenityKeys: [],
+          unitType: petUnitType || null,
+          petFriendly: true,
+        },
         replyType: "inventory",
       });
     }
@@ -1608,7 +2022,7 @@ app.post("/chat", async (req, res) => {
         setSession(sessionId, { listingId });
       } else if (
         session?.listingId &&
-        plan.use_session_unit &&
+        executionPlan.useSessionUnit &&
         !inventoryIntent &&
         !looksLikeInventoryWidePolicyRequest(normalizedMessage)
       ) {
@@ -2127,6 +2541,22 @@ app.post("/chat", async (req, res) => {
 
     // If we still don't have a listing, ask + suggestions
     if (!listingId) {
+      const shouldStayInventoryWide =
+        inventoryCapacityIntent ||
+        recommendationIntent ||
+        isInventoryQuery(normalizedMessage) ||
+        isInventoryAvailabilityQuestion(normalizedMessage) ||
+        detectInventoryConstraintRequest(normalizedMessage) ||
+        looksLikeInventoryWidePolicyRequest(normalizedMessage) ||
+        (looksLikeFollowupQuestion(userMessage) &&
+          (followupInventory?.type === "constraints" || followupInventory?.type === "amenity"));
+      if (shouldStayInventoryWide) {
+        return sendReply(
+          "I can keep this inventory-wide without locking to one unit. " +
+            "Tell me the filters you want (guests, dates, amenities, pet-friendly, or unit type) and I’ll narrow options.",
+          { route: "inventory_constraints", replyType: "inventory" }
+        );
+      }
       const suggestions = suggestUnits(userMessage, listings);
       const suggestionText =
         suggestions.length > 0
