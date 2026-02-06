@@ -14,7 +14,11 @@
     "golden:target": "node scripts/golden-run.js",
     "golden:full": "GOLDEN_MODE=full node scripts/golden-run.js",
     "golden:matrix": "GOLDEN_SUITE=matrix node scripts/golden-run.js",
+    "golden:bugs": "GOLDEN_SUITE=bugs node scripts/golden-run.js",
     "golden:all": "GOLDEN_SUITE=all GOLDEN_MODE=full node scripts/golden-run.js",
+    "golden:fuzz": "node scripts/golden-fuzz.js",
+    "golden:bug:add": "node scripts/golden-bug-add.js",
+    "golden:oracle": "node scripts/golden-oracle.js",
     "monitor:synthetic": "node scripts/synthetic-monitor.js"
   },
   "keywords": [],

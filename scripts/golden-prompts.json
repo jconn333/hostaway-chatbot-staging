@@ -867,5 +867,118 @@
       "booking link"
     ],
     "expectRegex": []
+  },
+  {
+    "name": "longtail-typo-weekend-1",
+    "sessionId": "golden-longtail-typo-weekend",
+    "message": "Is treehouse 3 available today?",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Here’s a quick, friendly overview"
+    ]
+  },
+  {
+    "name": "longtail-typo-weekend-2",
+    "sessionId": "golden-longtail-typo-weekend",
+    "message": "What about a weekened in march?",
+    "expectOneOfIncludes": [
+      "March",
+      "weekend",
+      "Book now:"
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Here’s a quick, friendly overview",
+      "Would you like me to check availability or answer anything else?"
+    ]
+  },
+  {
+    "name": "longtail-hot-tub-filter-1",
+    "sessionId": "golden-longtail-hot-tub-filter",
+    "message": "Which units have hot tubs?",
+    "expectIncludes": [
+      "Units with"
+    ],
+    "expectMeta": {
+      "route": "amenity_inventory"
+    },
+    "expectReplyType": "inventory"
+  },
+  {
+    "name": "longtail-hot-tub-filter-2",
+    "sessionId": "golden-longtail-hot-tub-filter",
+    "message": "Do any of them also have 2 bedrooms?",
+    "expectOneOfIncludes": [
+      "Units that match your request",
+      "I didn’t find any units that match that capacity."
+    ],
+    "expectMeta": {
+      "route": "amenity_inventory"
+    },
+    "expectReplyType": "inventory",
+    "forbidIncludes": [
+      "Which unit are you asking about?"
+    ]
+  },
+  {
+    "name": "longtail-date-followup-1",
+    "sessionId": "golden-longtail-date-followup",
+    "message": "Is red fern available next weekend?",
+    "expectOneOfIncludes": [
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability"
+  },
+  {
+    "name": "longtail-date-followup-2",
+    "sessionId": "golden-longtail-date-followup",
+    "message": "How about in March?",
+    "expectOneOfIncludes": [
+      "March",
+      "weekend",
+      "Book now:"
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Here’s a quick, friendly overview"
+    ]
+  },
+  {
+    "name": "longtail-link-format-1",
+    "sessionId": "golden-longtail-link-format",
+    "message": "Is treehouse 3 available this weekend?",
+    "expectIncludes": [
+      "Book now:"
+    ],
+    "expectRegex": [
+      "Book now:\\s*\\[[^\\]]+\\]\\(https://book\\.amishcountrylodging\\.com/listings/"
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Book now: Book these dates"
+    ]
   }
 ]

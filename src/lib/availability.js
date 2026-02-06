@@ -329,6 +329,13 @@ export function extractDates(message, timeZone = "America/New_York") {
   const msg = (message || "").toLowerCase();
   const nightCount = parseNightCount(msg);
   let dates = null;
+  const hasMonthName = /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\b/.test(
+    msg
+  );
+  const hasMonthDay = /\b(jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}\b/.test(
+    msg
+  );
+  const hasMonthOnlyWeekend = hasMonthName && !hasMonthDay && /\bweekend\b/.test(msg);
 
   // 1) Explicit ISO range: YYYY-MM-DD ... YYYY-MM-DD
   const isoMatches = msg.match(/\d{4}-\d{2}-\d{2}/g);
@@ -384,13 +391,24 @@ export function extractDates(message, timeZone = "America/New_York") {
     dates = { start, end };
   }
 
-  if (!dates && msg.includes("this weekend")) {
+  if (!dates && msg.includes("this weekend") && !hasMonthOnlyWeekend) {
     const start = isoDateThisOrNextWeekday(timeZone, 5); // Friday
     const end = addDays(start, 2); // checkout Sunday (2 nights)
     dates = { start, end };
   }
 
-  if (!dates && msg.includes("next weekend")) {
+  if (
+    !dates &&
+    /\bweekend\b/.test(msg) &&
+    !/\b(this|next)\s+weekend\b/.test(msg) &&
+    !hasMonthOnlyWeekend
+  ) {
+    const start = isoDateThisOrNextWeekday(timeZone, 5); // Friday
+    const end = addDays(start, 2); // checkout Sunday (2 nights)
+    dates = { start, end };
+  }
+
+  if (!dates && msg.includes("next weekend") && !hasMonthOnlyWeekend) {
     const start = isoDateNextWeekdayFromNextWeek(timeZone, 5); // Friday of next week
     const end = addDays(start, 2);
     dates = { start, end };

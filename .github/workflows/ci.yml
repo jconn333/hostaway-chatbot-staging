@@ -16,6 +16,7 @@ jobs:
       HOSTAWAY_ACCOUNT_ID: ${{ secrets.HOSTAWAY_ACCOUNT_ID }}
       HOSTAWAY_API_KEY: ${{ secrets.HOSTAWAY_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ENABLE_TEST_MODE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -24,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run golden:core
+      - run: npm run golden:bugs
 
   full-nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -32,6 +34,8 @@ jobs:
       HOSTAWAY_ACCOUNT_ID: ${{ secrets.HOSTAWAY_ACCOUNT_ID }}
       HOSTAWAY_API_KEY: ${{ secrets.HOSTAWAY_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      ENABLE_TEST_MODE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,3 +44,9 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run golden:all
+      - run: npm run golden:oracle
+      - run: npm run golden:fuzz -- --count 200 --seed ${{ github.run_number }}
+      - run: npm run monitor:synthetic
+      - if: failure() && env.SLACK_WEBHOOK_URL != ''
+        run: |
+          node scripts/slack-post.js "Nightly reliability checks failed for ${GITHUB_REPOSITORY} run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. Check golden:fuzz report artifacts/logs for seed and transcript details."

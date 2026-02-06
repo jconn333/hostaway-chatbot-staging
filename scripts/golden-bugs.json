@@ -1,0 +1,54 @@
+[
+  {
+    "bugId": "bug-treehouse-typo-weekend",
+    "sessionId": "golden-bug-treehouse-typo-weekend",
+    "turns": [
+      {
+        "message": "Is treehouse 3 available today?",
+        "expectMeta": { "route": "availability" },
+        "expectReplyType": "availability",
+        "expectOneOfIncludes": ["Treehouse #3", "Book now:", "already booked", "available"],
+        "forbidIncludes": ["Here’s a quick, friendly overview"]
+      },
+      {
+        "message": "What about a weekened in march?",
+        "expectMeta": { "route": "availability" },
+        "expectReplyType": "availability",
+        "expectOneOfIncludes": ["March", "weekend", "Book now:"],
+        "forbidIncludes": ["Here’s a quick, friendly overview", "Would you like me to check availability or answer anything else?"]
+      }
+    ]
+  },
+  {
+    "bugId": "bug-hot-tub-filter-preserve",
+    "sessionId": "golden-bug-hot-tub-filter-preserve",
+    "turns": [
+      {
+        "message": "Which units have hot tubs?",
+        "expectMeta": { "route": "amenity_inventory" },
+        "expectReplyType": "inventory",
+        "expectIncludes": ["Units with"]
+      },
+      {
+        "message": "Do any of them also have 2 bedrooms?",
+        "expectMeta": { "route": "amenity_inventory" },
+        "expectReplyType": "inventory",
+        "expectOneOfIncludes": ["Units that match your request", "I didn’t find any units"],
+        "forbidIncludes": ["Which unit are you asking about?"]
+      }
+    ]
+  },
+  {
+    "bugId": "bug-checkin-time-format",
+    "sessionId": "golden-bug-checkin-time-format",
+    "turns": [
+      {
+        "message": "What time is check-in for Treehouse #3?",
+        "expectMeta": { "route": "policy" },
+        "expectReplyType": "policy",
+        "expectOneOfIncludes": ["am", "pm", "Check"],
+        "forbidIncludes": ["15:00", "21:00", "1500", "2100"]
+      }
+    ]
+  }
+]

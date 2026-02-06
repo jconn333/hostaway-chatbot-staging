@@ -48,6 +48,11 @@ const INVENTORY_AVAILABILITY_CONCURRENCY = 5;
 const INVENTORY_AVAILABILITY_MAX = 20;
 const INTENT_MODEL = process.env.INTENT_MODEL || "gpt-4o-mini";
 const ANSWER_MODEL = process.env.ANSWER_MODEL || "gpt-4o-mini";
+const ENABLE_TEST_MODE =
+  String(
+    process.env.ENABLE_TEST_MODE ??
+      (process.env.NODE_ENV === "production" ? "false" : "true")
+  ).toLowerCase() === "true";
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const sessionStore = new Map(); // sessionId -> { listingId, dates, lastMessage, lastIntent, lastPolicyIntent, lastAmenityKey, updatedAt }
@@ -204,6 +209,9 @@ function normalizeUserMessage(message) {
     .replace(/\bhottub(s)?\b/gi, "hot tub$1")
     .replace(/\bavaiable\b/gi, "available")
     .replace(/\bavailble\b/gi, "available")
+    .replace(/\bweekened\b/gi, "weekend")
+    .replace(/\bwknd\b/gi, "weekend")
+    .replace(/\bnxt\b/gi, "next")
     .replace(/\bpet[- ]?freindly\b/gi, "pet-friendly")
     .replace(/\bcheckin\b/gi, "check in")
     .replace(/\bcheckout\b/gi, "check out");
@@ -504,6 +512,19 @@ function applyReplyVoice(reply, { intent, policyIntent, userMessage } = {}) {
   }
 
   return text;
+}
+
+function inferReplyType(route, reply = "") {
+  const r = String(route || "").toLowerCase();
+  if (r.includes("availability")) return "availability";
+  if (r.includes("policy")) return "policy";
+  if (r.includes("amenity") || r.includes("inventory")) return "inventory";
+  if (r.includes("summary")) return "summary";
+  const text = String(reply || "").toLowerCase();
+  if (/\bavailable|booked|book now|weekend\b/.test(text)) return "availability";
+  if (/\bpets?|smoking|parties|check-?in|check-?out|cancellation\b/.test(text)) return "policy";
+  if (/\bunits with|available units|pet-friendly units\b/.test(text)) return "inventory";
+  return "general";
 }
 
 function detectPolicyIntent(message) {
@@ -1114,7 +1135,7 @@ app.post("/chat", async (req, res) => {
       looksLikeProximityQuery(normalizedMessage) ||
       looksLikeSummaryRequest(normalizedMessage) ||
       Boolean(detectAmenityQuery(normalizedMessage));
-    const effectiveIntent =
+    let effectiveIntent =
       lowConfidence &&
       ["availability", "inventory_availability", "amenity_inventory", "policy", "compare", "summary"].includes(
         modelIntent
@@ -1122,14 +1143,52 @@ app.post("/chat", async (req, res) => {
       !heuristicSupports
         ? "general"
         : modelIntent;
-    const respond = (reply) => {
+    if (
+      effectiveIntent === "inventory_availability" &&
+      isPetFriendlyListRequest(normalizedMessage) &&
+      !extractDates(normalizedMessage)
+    ) {
+      effectiveIntent = "amenity_inventory";
+    }
+    const testModeRequested =
+      ENABLE_TEST_MODE && String(req.headers["x-test-mode"] || "").trim() === "1";
+    let responseRoute = effectiveIntent || "general";
+    let responseDates = null;
+    let responseInventoryFilters = null;
+    let responseReplyType = null;
+    const setResponseContext = ({ route, dates, inventoryFilters, replyType } = {}) => {
+      if (route) responseRoute = route;
+      if (dates) responseDates = dates;
+      if (inventoryFilters) responseInventoryFilters = inventoryFilters;
+      if (replyType) responseReplyType = replyType;
+    };
+    const sendReply = (reply, ctx = {}) => {
+      setResponseContext(ctx);
+      // Persist the resolved route-level intent for follow-up continuity.
+      const routedIntent = responseRoute || effectiveIntent || "general";
+      setSession(sessionId, { lastIntent: routedIntent });
       const voiced = applyReplyVoice(reply, {
         intent: effectiveIntent,
         policyIntent: policyIntentRaw,
         userMessage,
       });
       if (/Book now:/i.test(voiced)) metrics.booking_link_replies += 1;
-      return res.json({ reply: voiced });
+      if (!testModeRequested) {
+        return res.json({ reply: voiced });
+      }
+      return res.json({
+        reply: voiced,
+        meta: {
+          intent: effectiveIntent || "general",
+          route: responseRoute || effectiveIntent || "general",
+          listingId: listingId ? String(listingId) : null,
+          sessionListingId: session?.listingId ? String(session.listingId) : null,
+          dates: responseDates,
+          inventoryFilters: responseInventoryFilters,
+          usedSessionMemory: Boolean(memoryNote),
+          replyType: responseReplyType || inferReplyType(responseRoute, voiced),
+        },
+      });
     };
     if (effectiveIntent !== modelIntent) {
       metrics.intent_fallbacks += 1;
@@ -1178,6 +1237,16 @@ app.post("/chat", async (req, res) => {
     const accessToken = tokenData.access_token;
 
     const listings = await getListingsCached(accessToken);
+    if (!listingId) {
+      // Bind explicit full-name mentions early so unit-level availability questions
+      // are not accidentally routed into inventory filters.
+      const explicitListingId = findListingIdFromMessageStrong(normalizedMessage, listings);
+      if (explicitListingId) {
+        listingId = explicitListingId;
+        setSession(sessionId, { listingId });
+        setDebugHeader("ListingIdEarly", listingId);
+      }
+    }
     const recommendationIntent = detectRecommendationIntent(normalizedMessage);
 
     const runRecommendations = async ({
@@ -1236,9 +1305,10 @@ app.post("/chat", async (req, res) => {
     // Guided booking funnel mode: one question at a time.
     if (/help me book|book a stay|plan my stay|find me a place/i.test(normalizedMessage)) {
       setSession(sessionId, { funnel: { active: true, step: "dates", prefs: {} } });
-      return respond(
+      return sendReply(
         "Great — I can help you book. What dates are you looking at? " +
-          "Example: 2026-03-24 to 2026-03-26."
+          "Example: 2026-03-24 to 2026-03-26.",
+        { route: "recommendation", replyType: "summary" }
       );
     }
 
@@ -1249,11 +1319,17 @@ app.post("/chat", async (req, res) => {
       if (!prefs.dates) {
         const parsedDates = extractDates(normalizedMessage);
         if (!parsedDates) {
-          return respond("What dates should I check? Example: 2026-03-24 to 2026-03-26.");
+          return sendReply("What dates should I check? Example: 2026-03-24 to 2026-03-26.", {
+            route: "recommendation",
+            replyType: "summary",
+          });
         }
         prefs.dates = parsedDates;
         setSession(sessionId, { funnel: { active: true, step: "guests", prefs } });
-        return respond("Got it. How many guests should I plan for?");
+        return sendReply("Got it. How many guests should I plan for?", {
+          route: "recommendation",
+          replyType: "summary",
+        });
       }
 
       if (!prefs.capacity?.sleeps) {
@@ -1261,7 +1337,10 @@ app.post("/chat", async (req, res) => {
         const guestMatch = normalizedMessage.match(/\b(\d+)\s*(guest|guests|people|persons?)\b/);
         const sleeps = cap?.sleeps || (guestMatch ? Number(guestMatch[1]) : null);
         if (!sleeps) {
-          return respond("How many guests are in your group?");
+          return sendReply("How many guests are in your group?", {
+            route: "recommendation",
+            replyType: "summary",
+          });
         }
         prefs.capacity = { ...(cap || {}), sleeps };
       }
@@ -1280,9 +1359,10 @@ app.post("/chat", async (req, res) => {
       setSession(sessionId, { funnel: { active: false, step: "done", prefs } });
       metrics.recommendation_queries += 1;
       if (!recs.length) {
-        return respond(
+        return sendReply(
           "I couldn’t find a strong match for those details. " +
-            "Want me to try nearby dates or relax one preference?"
+            "Want me to try nearby dates or relax one preference?",
+          { route: "recommendation", replyType: "summary" }
         );
       }
 
@@ -1291,9 +1371,10 @@ app.post("/chat", async (req, res) => {
           `• [${r.safe.name}](${r.safe.bookingUrl}?start=${prefs.dates.start}&end=${prefs.dates.end})` +
           (r.reasons.length ? ` — ${r.reasons.join(", ")}` : "")
       );
-      return respond(
+      return sendReply(
         `Best matches for ${prefs.dates.start} to ${prefs.dates.end}:\n\n${lines.join("\n")}\n\n` +
-          "Want me to compare these side by side?"
+          "Want me to compare these side by side?",
+        { route: "recommendation", dates: prefs.dates, replyType: "inventory" }
       );
     }
 
@@ -1313,7 +1394,10 @@ app.post("/chat", async (req, res) => {
       });
 
       if (!recs.length) {
-        return respond("I couldn’t find a strong recommendation yet. Want me to check specific dates or guest count?");
+        return sendReply("I couldn’t find a strong recommendation yet. Want me to check specific dates or guest count?", {
+          route: "recommendation",
+          replyType: "summary",
+        });
       }
 
       const lines = recs.map((r) => {
@@ -1328,7 +1412,11 @@ app.post("/chat", async (req, res) => {
       });
 
       const scope = dates ? ` for ${dates.start} to ${dates.end}` : "";
-      return respond(`Top picks${scope}:\n\n${lines.join("\n")}`);
+      return sendReply(`Top picks${scope}:\n\n${lines.join("\n")}`, {
+        route: "recommendation",
+        dates: dates || null,
+        replyType: "inventory",
+      });
     }
 
     // ---------- INVENTORY-WIDE CAPACITY QUESTIONS ----------
@@ -1430,7 +1518,15 @@ app.post("/chat", async (req, res) => {
 
         const lines = results.filter(Boolean);
         if (lines.length === 0) {
-          return respond("I didn’t find any units that match that capacity.");
+          return sendReply("I didn’t find any units that match that capacity.", {
+            route: "amenity_inventory",
+            inventoryFilters: {
+              amenityKeys: capacityAmenityKeys,
+              unitType: capacityUnitType,
+              petFriendly: capacityWantsPetFriendly,
+            },
+            replyType: "inventory",
+          });
         }
         setSession(sessionId, {
           lastInventory: {
@@ -1440,7 +1536,15 @@ app.post("/chat", async (req, res) => {
             petFriendly: capacityWantsPetFriendly,
           },
         });
-        return respond(`Units that match your request:\n\n${lines.join("\n")}`);
+        return sendReply(`Units that match your request:\n\n${lines.join("\n")}`, {
+          route: "amenity_inventory",
+          inventoryFilters: {
+            amenityKeys: capacityAmenityKeys,
+            unitType: capacityUnitType,
+            petFriendly: capacityWantsPetFriendly,
+          },
+          replyType: "inventory",
+        });
       }
     }
 
@@ -1466,14 +1570,22 @@ app.post("/chat", async (req, res) => {
 
       const lines = results.filter(Boolean);
       if (lines.length === 0) {
-        return respond("I don’t currently see any pet‑friendly units.");
+        return sendReply("I don’t currently see any pet‑friendly units.", {
+          route: "amenity_inventory",
+          inventoryFilters: { amenityKeys: [], unitType: null, petFriendly: true },
+          replyType: "inventory",
+        });
       }
 
       setSession(sessionId, {
         lastInventory: { type: "amenity", amenityKeys: [], unitType: null, petFriendly: true },
       });
 
-      return respond(`Pet‑friendly units:\n\n${lines.join("\n")}`);
+      return sendReply(`Pet‑friendly units:\n\n${lines.join("\n")}`, {
+        route: "amenity_inventory",
+        inventoryFilters: { amenityKeys: [], unitType: null, petFriendly: true },
+        replyType: "inventory",
+      });
     }
 
     // Detect listing from message if not explicitly provided
@@ -1487,7 +1599,10 @@ app.post("/chat", async (req, res) => {
       // like "Red Fern" still bind to a single listing when clearly present.
       const detectedStrong = findListingIdFromMessageStrong(normalizedMessage, listings);
       const detectedLoose = findListingIdFromMessage(normalizedMessage, listings);
-      const detected = inventoryIntent ? detectedStrong || detectedLoose : detectedLoose;
+      const genericUnitMention = looksLikeGenericUnitReference(userMessage);
+      const detected = inventoryIntent
+        ? detectedStrong || detectedLoose
+        : detectedStrong || (genericUnitMention ? null : detectedLoose);
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });
@@ -1598,16 +1713,19 @@ app.post("/chat", async (req, res) => {
         setDebugHeader("Dates", `${dates.start}..${dates.end}`);
       }
       if (!dates) {
-        return res.json({
-          reply:
-            "Which dates should I check for availability? For example: “tonight” or “2026-03-24 to 2026-03-26”.",
-        });
+        return sendReply(
+          "Which dates should I check for availability? For example: “tonight” or “2026-03-24 to 2026-03-26”.",
+          { route: "inventory_availability", replyType: "availability" }
+        );
       }
 
       const endForCalendar = addDays(dates.end, -1);
       if (endForCalendar < dates.start) {
-        return res.json({
-          reply: "End date must be after start date (checkout after check-in).",
+        return sendReply("End date must be after start date (checkout after check-in).", {
+          route: "inventory_availability",
+          dates,
+          inventoryFilters: { unitType: unitType || null },
+          replyType: "availability",
         });
       }
 
@@ -1648,11 +1766,17 @@ app.post("/chat", async (req, res) => {
           unitType: unitType || null,
           availableCount: 0,
         });
-        return respond(
+        return sendReply(
           appendFollowupIfMissing(
             `I didn’t find any available${typeLabel} for ${dates.start} to ${dates.end}.`,
             "Want me to check other dates or unit types?"
-          )
+          ),
+          {
+            route: "inventory_availability",
+            dates,
+            inventoryFilters: { unitType: unitType || null },
+            replyType: "availability",
+          }
         );
       }
 
@@ -1672,11 +1796,17 @@ app.post("/chat", async (req, res) => {
         unitType: unitType || null,
         availableCount: shown.length,
       });
-      return respond(
+      return sendReply(
         appendFollowupIfMissing(
           `Available units for ${dates.start} to ${dates.end}${label}:\n\n${shown.join("\n")}${more}`,
           "Want me to check other dates or unit types?"
-        )
+        ),
+        {
+          route: "inventory_availability",
+          dates,
+          inventoryFilters: { unitType: unitType || null },
+          replyType: "availability",
+        }
       );
     }
 
@@ -1720,7 +1850,10 @@ app.post("/chat", async (req, res) => {
           primaryId,
           secondaryId,
         });
-        return respond(buildComparison(primarySafe, secondarySafe, userMessage));
+        return sendReply(buildComparison(primarySafe, secondarySafe, userMessage), {
+          route: "compare",
+          replyType: "summary",
+        });
       }
 
       const sameCity =
@@ -1767,10 +1900,11 @@ app.post("/chat", async (req, res) => {
         primaryId: displayPrimary?.id || primaryId,
         secondaryId: displaySecondary?.id || secondaryId,
       });
-      return respond(
+      return sendReply(
         `${locationLine}\n\n` +
           `[${displayPrimary.name}](${displayPrimary.bookingUrl})\n` +
-          `[${displaySecondary.name}](${displaySecondary.bookingUrl})`
+          `[${displaySecondary.name}](${displaySecondary.bookingUrl})`,
+        { route: "compare", replyType: "summary" }
       );
     }
 
@@ -1824,9 +1958,10 @@ app.post("/chat", async (req, res) => {
         const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
         const unsupportedTerms = extractUnsupportedAmenityTerms(normalizedMessage);
         if (unsupportedTerms.length > 0) {
-          return respond(
+          return sendReply(
             `I can’t reliably filter by ${unsupportedTerms.map((t) => `"${t}"`).join(", ")} yet. ` +
-              "I can filter by hot tubs, jacuzzis, pools, fireplaces, and saunas."
+              "I can filter by hot tubs, jacuzzis, pools, fireplaces, and saunas.",
+            { route: "amenity_inventory", replyType: "inventory" }
           );
         }
         const unsupportedAmenityFilter =
@@ -1834,9 +1969,10 @@ app.post("/chat", async (req, res) => {
           !wantsPetFriendly &&
           looksLikeAmenityFilterWithoutSupportedAmenity(normalizedMessage);
         if (unsupportedAmenityFilter) {
-          return respond(
+          return sendReply(
             "I can filter units by hot tubs, jacuzzis, pools, fireplaces, and saunas right now. " +
-              "Which amenity would you like me to use?"
+              "Which amenity would you like me to use?",
+            { route: "amenity_inventory", replyType: "inventory" }
           );
         }
         if (effectiveAmenityKeys.length) {
@@ -1882,7 +2018,15 @@ app.post("/chat", async (req, res) => {
           if (wantsPetFriendly) parts.push("pet‑friendly");
           if (unitType) parts.push(unitType);
           const label = parts.length ? parts.join(", ") : "that";
-          return respond(`I didn’t find any units matching ${label}.`);
+          return sendReply(`I didn’t find any units matching ${label}.`, {
+            route: "amenity_inventory",
+            inventoryFilters: {
+              amenityKeys: effectiveAmenityKeys,
+              unitType: unitType || null,
+              petFriendly: wantsPetFriendly,
+            },
+            replyType: "inventory",
+          });
         }
 
         const lines = matches
@@ -1896,7 +2040,15 @@ app.post("/chat", async (req, res) => {
         if (unitType) labelParts.push(unitType);
         const label = labelParts.length ? ` (${labelParts.join(", ")})` : "";
 
-        return respond(`Units with${label}:\n\n${lines}`);
+        return sendReply(`Units with${label}:\n\n${lines}`, {
+          route: "amenity_inventory",
+          inventoryFilters: {
+            amenityKeys: effectiveAmenityKeys,
+            unitType: unitType || null,
+            petFriendly: wantsPetFriendly,
+          },
+          replyType: "inventory",
+        });
         }
       }
     }
@@ -1953,18 +2105,20 @@ app.post("/chat", async (req, res) => {
             });
             const uniform = nonNull.length === listings.length && counts.size === 1;
             if (uniform) {
-              return respond(generalized);
+              return sendReply(generalized, { route: "policy", replyType: "policy" });
             }
             if (policyIntent === "pets") {
-              return respond(
+              return sendReply(
                 `${generalized}\n\n` +
                   "Pet policies can vary by unit. Do you have a specific unit you'd like me to check, " +
-                  "or would you like a list of pet‑friendly units?"
+                  "or would you like a list of pet‑friendly units?",
+                { route: "policy", replyType: "policy" }
               );
             }
-            return respond(
+            return sendReply(
               `${generalized}\n\n` +
-                "Policies can vary by unit. Do you have a specific unit you'd like me to check?"
+                "Policies can vary by unit. Do you have a specific unit you'd like me to check?",
+              { route: "policy", replyType: "policy" }
             );
           }
         }
@@ -1979,13 +2133,33 @@ app.post("/chat", async (req, res) => {
           ? suggestions.map((s) => `• ${s.name}`).join("\n")
           : "• (No close matches found)";
 
-      return res.json({
-        reply:
-          "Which unit are you asking about?\n\n" +
+      return sendReply(
+        "Which unit are you asking about?\n\n" +
           "I can give an exact answer once I know the unit.\n\n" +
           "Possible matches:\n" +
           suggestionText,
-      });
+        { route: "disambiguation", replyType: "summary" }
+      );
+    }
+
+    if (listingId && directBookingRequest) {
+      const listing = await fetchListingByIdCached(listingId, accessToken);
+      const safe = toSafeListingFacts(listing, { audience: "postbooking" });
+      let bookUrl = safe.bookingUrl;
+      if (session?.dates?.start && session?.dates?.end) {
+        bookUrl = `${safe.bookingUrl}?start=${session.dates.start}&end=${session.dates.end}`;
+      }
+      return sendReply(
+        `Absolutely — here’s your booking link for ${safe.name}:\n\nBook now: ${formatBookLink(
+          bookUrl,
+          safe.name
+        )}`,
+        {
+          route: "availability",
+          dates: session?.dates || null,
+          replyType: "availability",
+        }
+      );
     }
 
     const wantsNextAvailableWeekend =
@@ -1994,17 +2168,22 @@ app.post("/chat", async (req, res) => {
         normalizedMessage
       );
 
-    // If availability question AND user gave dates -> answer from Hostaway truth
+    let dates = extractDates(normalizedMessage);
+    const monthRange = monthQueryToRange(normalizedMessage);
+    // Availability flow should be driven by explicit availability/date signals
+    // plus true availability follow-ups from session context.
     const availabilityAsked =
       isAvailabilityQuestion(normalizedMessage) ||
-      effectiveIntent === "availability" ||
-      session?.lastIntent === "availability";
+      Boolean(dates) ||
+      session?.lastIntent === "availability" ||
+      // Natural follow-ups like "what about in March?" should stay in availability flow
+      // when we already have a unit in context.
+      (Boolean(monthRange) && (Boolean(listingId) || looksLikeFollowupQuestion(userMessage)));
     if (availabilityAsked) metrics.availability_queries += 1;
-    let dates = extractDates(normalizedMessage);
     if (
       !dates &&
       (isAvailabilityQuestion(normalizedMessage) ||
-        effectiveIntent === "availability" ||
+        Boolean(extractDates(normalizedMessage)) ||
         session?.lastIntent === "availability") &&
       session?.dates
     ) {
@@ -2032,25 +2211,25 @@ app.post("/chat", async (req, res) => {
             `\n\nSuggested stay: ${next.start} to ${next.suggestedEnd}\n` +
             `Book now: ${formatBookLink(suggestUrl)}`;
         }
-        return respond(
+        return sendReply(
           `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${formatBookLink(bookUrl)}` +
             suggestLine +
-            memoryNote
+            memoryNote,
+          { route: "availability", dates: { start: next.start, end: next.end }, replyType: "availability" }
         );
       }
-      return respond(
+      return sendReply(
         "I couldn’t find an available weekend in the next few months. " +
           "If you have specific dates in mind, I can check those." +
-          memoryNote
+          memoryNote,
+        { route: "availability", replyType: "availability" }
       );
     }
-    const monthRange = monthQueryToRange(normalizedMessage);
     const wantsWeekendInMonth =
       listingId &&
       !dates &&
-      availabilityAsked &&
-      /\bweekend\b/.test(normalizedMessage) &&
-      Boolean(monthRange);
+      Boolean(monthRange) &&
+      (availabilityAsked || /\bweekend\b/i.test(normalizedMessage) || looksLikeFollowupQuestion(userMessage));
     if (wantsWeekendInMonth) {
       const listing = await fetchListingById(listingId, accessToken);
       const safe = toSafeListingFacts(listing, { audience: "postbooking" });
@@ -2059,9 +2238,10 @@ app.post("/chat", async (req, res) => {
       const weekends = findAvailableWeekendsInRange(days, monthRange.start, monthRange.end, 3);
 
       if (!weekends.length) {
-        return respond(
+        return sendReply(
           `I couldn’t find an available weekend in ${monthRange.monthName}. Want me to check another month?` +
-            memoryNote
+            memoryNote,
+          { route: "availability", dates: { start: monthRange.start, end: monthRange.end }, replyType: "availability" }
         );
       }
 
@@ -2078,16 +2258,28 @@ app.post("/chat", async (req, res) => {
         return `• ${w.start} to ${w.end} (Fri-Sun) — [Book this weekend](${baseUrl})`;
       });
 
-      return respond(
+      return sendReply(
         `Available weekends in ${monthRange.monthName} for ${safe.name}:\n\n${lines.join("\n")}` +
-          memoryNote
+          memoryNote,
+        { route: "availability", dates: { start: monthRange.start, end: monthRange.end }, replyType: "availability" }
       );
     }
 
-    if (listingId && !dates && isAvailabilityQuestion(normalizedMessage)) {
-      return respond(
+    if (
+      listingId &&
+      !dates &&
+      (isAvailabilityQuestion(normalizedMessage) || effectiveIntent === "availability")
+    ) {
+      return sendReply(
         "Which dates should I check for availability? For example: “today”, “this weekend”, or “2026-03-24 to 2026-03-26”." +
-          memoryNote
+          memoryNote,
+        { route: "availability", replyType: "availability" }
+      );
+    }
+    if (dates && availabilityAsked && !listingId) {
+      return sendReply(
+        "Which unit should I check for those dates? If you want, I can also search across all units.",
+        { route: "availability", dates, replyType: "availability" }
       );
     }
     if (
@@ -2100,8 +2292,10 @@ app.post("/chat", async (req, res) => {
       const endForCalendar = addDays(dates.end, -1);
 
       if (endForCalendar < dates.start) {
-        return res.json({
-          reply: "End date must be after start date (checkout after check-in).",
+        return sendReply("End date must be after start date (checkout after check-in).", {
+          route: "availability",
+          dates,
+          replyType: "availability",
         });
       }
 
@@ -2157,7 +2351,7 @@ app.post("/chat", async (req, res) => {
         available: Boolean(data?.available),
         reasonCode: data?.reasonCode || "unknown",
       });
-      return respond(
+      return sendReply(
         appendFollowupIfMissing(
           (data.message || "Availability check complete.") +
             (extraLines ? `\n${extraLines}` : "") +
@@ -2166,7 +2360,8 @@ app.post("/chat", async (req, res) => {
             evidenceLine +
             memoryNote,
           "Would you like me to check other dates?"
-        )
+        ),
+        { route: "availability", dates, replyType: "availability" }
       );
     }
 
@@ -2179,7 +2374,10 @@ app.post("/chat", async (req, res) => {
       const reply = has
         ? `Yes — ${safe.name} has a ${listingAmenityKey}.`
         : `No — ${safe.name} does not have a ${listingAmenityKey}.`;
-      return respond(reply + `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}` + memoryNote);
+      return sendReply(reply + `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}` + memoryNote, {
+        route: "amenity_inventory",
+        replyType: "inventory",
+      });
     }
 
     // General Q&A: Fetch listing and build safe facts
@@ -2196,11 +2394,12 @@ app.post("/chat", async (req, res) => {
     if (capacityFactQuestion) {
       const capacityReply = capacityAnswerFromFacts(safe, normalizedMessage);
       if (capacityReply) {
-        return respond(
+        return sendReply(
           appendFollowupIfMissing(
             capacityReply + memoryNote,
             "Want me to check availability or other unit details?"
-          )
+          ),
+          { route: "summary", replyType: "summary" }
         );
       }
     }
@@ -2230,11 +2429,12 @@ app.post("/chat", async (req, res) => {
           listingId,
           policy: policyIntent,
         });
-        respond(
+        sendReply(
           appendFollowupIfMissing(
             policyReplyScoped + bookingLine + evidenceLine + memoryNote,
             "Want me to check a different unit?"
-          )
+          ),
+          { route: "policy", replyType: "policy" }
         );
         return;
       }
@@ -2246,7 +2446,10 @@ app.post("/chat", async (req, res) => {
           ? `\n\nBook now: ${formatBookLink(safe.bookingUrl, safe.name)}`
           : "";
       setSession(sessionId, { lastMessage: userMessage });
-      respond(buildSafeSummary(safe) + bookingLine + memoryNote);
+      sendReply(buildSafeSummary(safe) + bookingLine + memoryNote, {
+        route: "summary",
+        replyType: "summary",
+      });
       return;
     }
 
@@ -2293,7 +2496,10 @@ app.post("/chat", async (req, res) => {
     const aiEvidenceLine = wantsEvidenceLine(normalizedMessage)
       ? buildEvidenceLine({ confidence: "medium", source: "unit safe facts" })
       : "";
-    respond(aiText + bookingLine + aiEvidenceLine + memoryNote);
+    sendReply(aiText + bookingLine + aiEvidenceLine + memoryNote, {
+      route: "general",
+      replyType: "general",
+    });
     setSession(sessionId, { lastMessage: userMessage });
   } catch (err) {
     console.error(err);

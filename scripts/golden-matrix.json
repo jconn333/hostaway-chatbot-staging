@@ -3,54 +3,160 @@
     "name": "matrix-about",
     "sessionId": "golden-matrix-about",
     "message": "Tell me about {{unit_name}}",
-    "expectIncludes": ["{{unit_name}}", "Book now:"],
+    "expectIncludes": [
+      "{{unit_name}}",
+      "Book now:"
+    ],
     "expectRegex": [],
     "expectOneOfIncludes": [],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
-    ]
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "summary"
+    },
+    "expectReplyType": "summary"
   },
   {
     "name": "matrix-hot-tub",
     "sessionId": "golden-matrix-hot-tub",
     "message": "Does {{unit_name}} have a hot tub?",
-    "expectIncludes": ["{{unit_name}}"],
+    "expectIncludes": [
+      "{{unit_name}}"
+    ],
     "expectRegex": [],
-    "expectOneOfIncludes": ["hot tub", "doesn't have", "does not have", "jacuzzi"],
+    "expectOneOfIncludes": [
+      "hot tub",
+      "doesn't have",
+      "does not have",
+      "jacuzzi"
+    ],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
-    ]
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "amenity_inventory"
+    },
+    "expectReplyType": "inventory"
   },
   {
     "name": "matrix-checkin",
     "sessionId": "golden-matrix-checkin",
     "message": "What time is check-in for {{unit_name}}?",
     "expectIncludes": [],
-    "expectRegex": ["Check.?in"],
-    "expectOneOfIncludes": ["am", "pm", "Book now:"],
+    "expectRegex": [
+      "Check.?in"
+    ],
+    "expectOneOfIncludes": [
+      "am",
+      "pm",
+      "Book now:"
+    ],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "policy"
+    },
+    "expectReplyType": "policy",
+    "forbidIncludes": [
+      "15:00",
+      "21:00",
+      "1500",
+      "2100"
     ]
   },
   {
@@ -59,70 +165,207 @@
     "message": "Is smoking allowed at {{unit_name}}?",
     "expectIncludes": [],
     "expectRegex": [],
-    "expectOneOfIncludes": ["smoking", "non‑smoking", "non-smoking", "no smoking"],
+    "expectOneOfIncludes": [
+      "smoking",
+      "non‑smoking",
+      "non-smoking",
+      "no smoking"
+    ],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
-    ]
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "policy"
+    },
+    "expectReplyType": "policy"
   },
   {
     "name": "matrix-availability-two-nights",
     "sessionId": "golden-matrix-availability-two-nights",
     "message": "Is {{unit_name}} available April 1 for two nights?",
-    "expectIncludes": ["2026-04-01", "Book now:"],
+    "expectIncludes": [
+      "2026-04-01",
+      "Book now:"
+    ],
     "expectRegex": [],
     "expectOneOfIncludes": [],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Book now: Book these dates"
     ]
   },
   {
     "name": "matrix-availability-range",
     "sessionId": "golden-matrix-availability-range",
     "message": "Can I book {{unit_name}} from April 3 to April 5?",
-    "expectIncludes": ["2026-04-03", "2026-04-05", "Book now:"],
+    "expectIncludes": [
+      "2026-04-03",
+      "2026-04-05",
+      "Book now:"
+    ],
     "expectRegex": [],
     "expectOneOfIncludes": [],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Book now: Book these dates"
     ]
   },
   {
     "name": "matrix-availability-endash",
     "sessionId": "golden-matrix-availability-endash",
     "message": "Need {{unit_name}} Apr 7–Apr 9. Is it open?",
-    "expectIncludes": ["2026-04-07", "2026-04-09", "Book now:"],
+    "expectIncludes": [
+      "2026-04-07",
+      "2026-04-09",
+      "Book now:"
+    ],
     "expectRegex": [],
     "expectOneOfIncludes": [],
     "units": [
-      { "slug": "joy", "unit_name": "Joy Lodge Suite" },
-      { "slug": "grace", "unit_name": "Grace Lodge Suite" },
-      { "slug": "redfern", "unit_name": "Red Fern Cabin" },
-      { "slug": "waterlily", "unit_name": "Water Lily Cabin" },
-      { "slug": "serenity", "unit_name": "Serenity Lodge Suite" },
-      { "slug": "appleblossom", "unit_name": "Apple Blossom Cabin" },
-      { "slug": "wildcherry", "unit_name": "Wild Cherry Treehouse" },
-      { "slug": "premier10", "unit_name": "Premier Cottage #10" }
+      {
+        "slug": "joy",
+        "unit_name": "Joy Lodge Suite"
+      },
+      {
+        "slug": "grace",
+        "unit_name": "Grace Lodge Suite"
+      },
+      {
+        "slug": "redfern",
+        "unit_name": "Red Fern Cabin"
+      },
+      {
+        "slug": "waterlily",
+        "unit_name": "Water Lily Cabin"
+      },
+      {
+        "slug": "serenity",
+        "unit_name": "Serenity Lodge Suite"
+      },
+      {
+        "slug": "appleblossom",
+        "unit_name": "Apple Blossom Cabin"
+      },
+      {
+        "slug": "wildcherry",
+        "unit_name": "Wild Cherry Treehouse"
+      },
+      {
+        "slug": "premier10",
+        "unit_name": "Premier Cottage #10"
+      }
+    ],
+    "expectMeta": {
+      "route": "availability"
+    },
+    "expectReplyType": "availability",
+    "forbidIncludes": [
+      "Book now: Book these dates"
     ]
   }
 ]
