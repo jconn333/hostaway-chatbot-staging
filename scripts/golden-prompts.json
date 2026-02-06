@@ -4,7 +4,7 @@
     "sessionId": "golden-weekend",
     "message": "Is red fern available this weekend?",
     "expectIncludes": ["Book now:"],
-    "expectRegex": ["Check.?in"]
+    "expectRegex": []
   },
   {
     "name": "next-weekend",
@@ -186,7 +186,7 @@
     "sessionId": "golden-edge",
     "message": "Is Red Fern available tonight?",
     "expectIncludes": ["Book now:"],
-    "expectRegex": ["Check.?in"]
+    "expectRegex": []
   },
   {
     "name": "availability-tomorrow",

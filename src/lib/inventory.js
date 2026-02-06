@@ -5,6 +5,7 @@ const AMENITY_SYNONYMS = [
   { key: "jacuzzi", patterns: ["jacuzzi", "jacuzzis", "spa", "whirlpool", "jetted tub", "jet tub"] },
   { key: "pool", patterns: ["pool", "pools", "swimming pool", "swimming pools"] },
   { key: "fireplace", patterns: ["fireplace", "fireplaces", "gas fireplace", "wood fireplace"] },
+  { key: "sauna", patterns: ["sauna", "saunas", "steam room"] },
 ];
 
 export function detectAmenityQuery(message) {

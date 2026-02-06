@@ -198,6 +198,65 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   };
 }
 
+export function findAlternativeStays(
+  calendarDays,
+  startDate,
+  desiredNights = 2,
+  maxNights = 5,
+  maxOptions = 3
+) {
+  const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
+  const byDate = new Map(daysArr.map((d) => [d.date, d]));
+  const keys = [...byDate.keys()].sort();
+  if (!keys.length) return [];
+
+  const capNights = Math.max(1, Math.min(5, Number(desiredNights) || 1));
+  const nightPlans = [capNights];
+  for (let n = capNights + 1; n <= Math.max(capNights, maxNights); n++) nightPlans.push(n);
+
+  const isNightOpen = (d) => !d || (d.isAvailable !== 0 && d.status !== "reserved");
+  const canArrive = (d) => !d || d.closedOnArrival !== 1;
+  const canDepart = (d) => !d || d.closedOnDeparture !== 1;
+
+  const options = [];
+  for (const iso of keys) {
+    if (iso < startDate) continue;
+    const day0 = byDate.get(iso);
+    if (!canArrive(day0)) continue;
+    if (!isNightOpen(day0)) continue;
+
+    for (const nights of nightPlans) {
+      let open = true;
+      for (let i = 0; i < nights; i++) {
+        const d = byDate.get(addDays(iso, i));
+        if (!isNightOpen(d)) {
+          open = false;
+          break;
+        }
+      }
+      if (!open) continue;
+
+      const checkout = addDays(iso, nights);
+      const checkoutDay = byDate.get(checkout);
+      if (!canDepart(checkoutDay)) continue;
+
+      const minStay = Number(day0?.minimumStay || 1);
+      if (Number.isFinite(minStay) && minStay > nights) continue;
+
+      options.push({
+        start: iso,
+        end: checkout,
+        nights,
+      });
+      break; // prefer shortest valid option for this start day
+    }
+
+    if (options.length >= maxOptions) break;
+  }
+
+  return options;
+}
+
 export function extractDates(message, timeZone = "America/New_York") {
   const msg = (message || "").toLowerCase();
   const nightCount = parseNightCount(msg);

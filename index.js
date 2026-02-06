@@ -8,6 +8,7 @@ import {
   isAvailabilityQuestion,
   isInventoryAvailabilityQuestion,
   summarizeAvailabilityWithAlternatives,
+  findAlternativeStays,
   addDays,
   extractDates,
   getTodayIso,
@@ -59,11 +60,19 @@ const metrics = {
   intent_fallbacks: 0,
   availability_queries: 0,
   policy_queries: 0,
+  recommendation_queries: 0,
+  booking_link_replies: 0,
 };
+
+const eventLog = [];
+const EVENT_LOG_MAX = 3000;
 
 function logEvent(type, data = {}) {
   const base = { ts: new Date().toISOString(), type };
-  console.log(JSON.stringify({ ...base, ...data }));
+  const evt = { ...base, ...data };
+  eventLog.push(evt);
+  if (eventLog.length > EVENT_LOG_MAX) eventLog.shift();
+  console.log(JSON.stringify(evt));
 }
 
 function getSession(sessionId) {
@@ -156,6 +165,43 @@ function looksLikeSummaryRequest(message) {
   return /\b(tell me about|about|overview|describe|summary)\b/.test(msg);
 }
 
+function normalizeUserMessage(message) {
+  return String(message || "")
+    .replace(/\bhottub(s)?\b/gi, "hot tub$1")
+    .replace(/\bavaiable\b/gi, "available")
+    .replace(/\bavailble\b/gi, "available")
+    .replace(/\bpet[- ]?freindly\b/gi, "pet-friendly")
+    .replace(/\bcheckin\b/gi, "check in")
+    .replace(/\bcheckout\b/gi, "check out");
+}
+
+function wantsEvidenceLine(message) {
+  const msg = (message || "").toLowerCase();
+  return /\b(source|evidence|how sure|confidence|how do you know|why)\b/.test(msg);
+}
+
+function buildEvidenceLine({ confidence = "high", source = "" } = {}) {
+  if (!source) return "";
+  return `\n\n(Confidence: ${confidence}. Source: ${source}.)`;
+}
+
+function nightsBetween(start, end) {
+  if (!start || !end) return 1;
+  const [ys, ms, ds] = String(start).split("-").map(Number);
+  const [ye, me, de] = String(end).split("-").map(Number);
+  const a = Date.UTC(ys, (ms || 1) - 1, ds || 1);
+  const b = Date.UTC(ye, (me || 1) - 1, de || 1);
+  const nights = Math.round((b - a) / 86400000);
+  return Math.max(1, Math.min(5, nights || 1));
+}
+
+function detectRecommendationIntent(message) {
+  const msg = (message || "").toLowerCase();
+  return /\b(recommend|suggest|best option|best unit|which should i|help me choose|help me book|find me)\b/.test(
+    msg
+  );
+}
+
 function isInventoryQuery(message) {
   const msg = (message || "").toLowerCase();
   const hasListWords = /\b(which|what|any|show|list)\b/.test(msg);
@@ -223,6 +269,38 @@ function appendFollowupIfMissing(text, followup) {
   if (!t) return followup;
   if (/\?\s*$/.test(t)) return t;
   return `${t}\n\n${followup}`;
+}
+
+function applyReplyVoice(reply, { intent, policyIntent, userMessage } = {}) {
+  const text = String(reply || "").trim();
+  if (!text) return text;
+
+  // Keep high-signal disambiguation prompts untouched.
+  if (/^Which unit are you asking about\?/i.test(text)) return text;
+
+  const hasFollowup = /\n\n(?:Would you like|Want me to|Do you want|Could you)/i.test(text);
+  const availabilityIntent = intent === "availability" || isAvailabilityQuestion(userMessage || "");
+  const policyLike = intent === "policy" || Boolean(policyIntent);
+
+  if (/^(Yes|No)\s*[—-]/i.test(text) && !hasFollowup) {
+    const followup = availabilityIntent
+      ? "Would you like me to check other dates?"
+      : policyLike
+        ? "Want me to check another unit?"
+        : "Want me to check anything else?";
+    return appendFollowupIfMissing(text, followup);
+  }
+
+  if (/^I (didn’t|don't) (find|currently see)\b/i.test(text) && !hasFollowup) {
+    const followup = availabilityIntent
+      ? "Want me to try different dates?"
+      : policyLike
+        ? "Want me to check a specific unit?"
+        : "Want me to try a different unit?";
+    return appendFollowupIfMissing(text, followup);
+  }
+
+  return text;
 }
 
 function detectPolicyIntent(message) {
@@ -480,7 +558,105 @@ function detectPetFriendlyFilter(message) {
   return /\bpet[- ]?friendly\b|\bpets? allowed\b|\ballow(s)? pets\b/.test(msg);
 }
 
-function buildComparison(primarySafe, secondarySafe) {
+function explainRecommendationReasons(safe, { capacity, amenityKeys, wantsPetFriendly, unitType } = {}) {
+  const reasons = [];
+  if (capacity?.sleeps && safe.sleeps >= capacity.sleeps) reasons.push(`fits ${capacity.sleeps} guests`);
+  if (capacity?.bedrooms && safe.bedrooms >= capacity.bedrooms)
+    reasons.push(`${safe.bedrooms} bedrooms`);
+  if (capacity?.bathrooms && safe.bathrooms >= capacity.bathrooms)
+    reasons.push(`${safe.bathrooms} bathrooms`);
+  if (amenityKeys?.length) {
+    for (const k of amenityKeys) {
+      if (hasAmenity(safe, k)) reasons.push(k);
+    }
+  }
+  if (wantsPetFriendly && petPolicyFromRules(safe) === "allowed") reasons.push("pet-friendly");
+  if (unitType && String(safe.name || "").toLowerCase().includes(unitType)) reasons.push(unitType);
+  return reasons.slice(0, 3);
+}
+
+function scoreRecommendation(safe, { capacity, amenityKeys, wantsPetFriendly, unitType } = {}) {
+  let score = 0;
+  if (capacity?.sleeps) {
+    if ((safe.sleeps || 0) < capacity.sleeps) return -1;
+    score += 3;
+  }
+  if (capacity?.bedrooms) {
+    if ((safe.bedrooms || 0) < capacity.bedrooms) return -1;
+    score += 2;
+  }
+  if (capacity?.bathrooms) {
+    if ((safe.bathrooms || 0) < capacity.bathrooms) return -1;
+    score += 2;
+  }
+  if (capacity?.beds) {
+    if ((safe.beds || 0) < capacity.beds) return -1;
+    score += 1;
+  }
+
+  if (amenityKeys?.length) {
+    let matched = 0;
+    for (const key of amenityKeys) {
+      if (hasAmenity(safe, key)) {
+        score += 2;
+        matched += 1;
+      }
+    }
+    if (matched === 0) score -= 1;
+  }
+
+  if (wantsPetFriendly) {
+    if (petPolicyFromRules(safe) === "allowed") score += 2;
+    else score -= 2;
+  }
+
+  if (unitType && String(safe.name || "").toLowerCase().includes(unitType)) score += 1;
+  return score;
+}
+
+function looksLikeAmenityFilterWithoutSupportedAmenity(message) {
+  const msg = (message || "").toLowerCase();
+  const hasFilterVerb = /\b(with|have|has|featuring|include|includes)\b/.test(msg);
+  const hasInventoryWords = /\b(units|cabins|suites|lodges|properties|listings|rentals)\b/.test(msg);
+  return hasFilterVerb && hasInventoryWords;
+}
+
+function extractUnsupportedAmenityTerms(message) {
+  const msg = String(message || "").toLowerCase();
+  const m = msg.match(/\b(?:with|have|has|featuring|include|includes)\b(.+)/);
+  if (!m) return [];
+
+  const tail = m[1]
+    .replace(/\b(for|from|to|on|in|at|next|this|tonight|tomorrow)\b.*$/, "")
+    .trim();
+  if (!tail) return [];
+
+  const supported =
+    /\b(hot tub|hot tubs|hottub|hottubs|jacuzzi|jacuzzis|spa\b|whirlpool|pool|pools|fireplace|fireplaces|sauna|saunas|pet[- ]?friendly|pets?)\b/;
+  const ignore = /\b(unit|units|cabin|cabins|suite|suites|lodge|lodges|property|properties|listing|listings|rental|rentals)\b/;
+
+  const parts = tail
+    .split(/\s*(?:,| and | or |\/|\+)\s*/)
+    .map((s) =>
+      s
+        .replace(/\b(a|an|the|any)\b/g, "")
+        .replace(/[^\w\s-]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+    )
+    .filter(Boolean);
+
+  const unsupported = [];
+  for (const part of parts) {
+    if (ignore.test(part)) continue;
+    if (supported.test(part)) continue;
+    if (/\d/.test(part)) continue;
+    unsupported.push(part);
+  }
+  return unsupported;
+}
+
+function buildComparison(primarySafe, secondarySafe, message = "") {
   const lines = [];
   const diffs = [];
   lines.push("Here’s a quick comparison:");
@@ -523,6 +699,23 @@ function buildComparison(primarySafe, secondarySafe) {
     lines.push("Key differences:");
     for (const d of diffs.slice(0, 6)) lines.push(`• ${d}`);
   }
+  const msg = (message || "").toLowerCase();
+  let recommendation = null;
+  if (/\b(more beds?|more bedrooms?|bigger|larger|group)\b/.test(msg)) {
+    recommendation =
+      (primarySafe.bedrooms || 0) >= (secondarySafe.bedrooms || 0) ? primarySafe : secondarySafe;
+  } else if (/\b(bath(room)?|more bathrooms?)\b/.test(msg)) {
+    recommendation =
+      (primarySafe.bathrooms || 0) >= (secondarySafe.bathrooms || 0) ? primarySafe : secondarySafe;
+  } else if (/\bhot tub|jacuzzi\b/.test(msg)) {
+    const pHas = hasAmenity(primarySafe, "hot tub") || hasAmenity(primarySafe, "jacuzzi");
+    const sHas = hasAmenity(secondarySafe, "hot tub") || hasAmenity(secondarySafe, "jacuzzi");
+    if (pHas !== sHas) recommendation = pHas ? primarySafe : secondarySafe;
+  }
+  if (recommendation) {
+    lines.push("");
+    lines.push(`Recommendation based on your preference: ${recommendation.name}.`);
+  }
   lines.push("");
   lines.push(`[${primarySafe.name}](${primarySafe.bookingUrl})`);
   lines.push(`[${secondarySafe.name}](${secondarySafe.bookingUrl})`);
@@ -557,6 +750,32 @@ app.get("/metrics", (req, res) => {
       ? Number((metrics.intent_fallbacks / metrics.requests_total).toFixed(4))
       : 0;
   res.json({ ...metrics, intent_fallback_rate: fallbackRate });
+});
+
+app.get("/analytics/recent", (req, res) => {
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+  const type = String(req.query.type || "").trim();
+  const rows = type ? eventLog.filter((e) => e.type === type) : eventLog;
+  res.json({
+    ok: true,
+    count: rows.length,
+    rows: rows.slice(-limit),
+  });
+});
+
+app.get("/analytics/summary", (req, res) => {
+  const byType = {};
+  for (const e of eventLog) byType[e.type] = (byType[e.type] || 0) + 1;
+  const mismatches = eventLog.filter((e) => e.type === "qa_mismatch").length;
+  const availabilityResponses = eventLog.filter((e) => e.type === "availability_response").length;
+  res.json({
+    ok: true,
+    events_total: eventLog.length,
+    byType,
+    mismatches,
+    availabilityResponses,
+    bookingLinkReplies: metrics.booking_link_replies,
+  });
 });
 
 /* ---------- SANDBOX UI ---------- */
@@ -594,6 +813,7 @@ app.post("/chat", async (req, res) => {
   try {
     metrics.requests_total += 1;
     const userMessage = req.body.message || "";
+    const normalizedMessage = normalizeUserMessage(userMessage);
     let listingId = req.body.listingId || null;
     const sessionId = req.body.sessionId || req.headers["x-session-id"] || null;
     const session = sessionId ? getSession(sessionId) : null;
@@ -613,19 +833,19 @@ app.post("/chat", async (req, res) => {
       looksLikeFollowupQuestion(userMessage) && session?.lastInventory
         ? session.lastInventory
         : null;
-    const intent = await classifyIntent(userMessage);
-    const policyIntentRaw = detectPolicyIntent(userMessage);
+    const intent = await classifyIntent(normalizedMessage);
+    const policyIntentRaw = detectPolicyIntent(normalizedMessage);
     const modelIntent = intent.intent || "general";
     const modelConfidence = Number(intent.confidence ?? 0);
     const lowConfidence = Number.isFinite(modelConfidence) && modelConfidence > 0 && modelConfidence < 0.45;
     const heuristicSupports =
-      isInventoryAvailabilityQuestion(userMessage) ||
-      isInventoryQuery(userMessage) ||
-      isAvailabilityQuestion(userMessage) ||
+      isInventoryAvailabilityQuestion(normalizedMessage) ||
+      isInventoryQuery(normalizedMessage) ||
+      isAvailabilityQuestion(normalizedMessage) ||
       Boolean(policyIntentRaw) ||
-      looksLikeProximityQuery(userMessage) ||
-      looksLikeSummaryRequest(userMessage) ||
-      Boolean(detectAmenityQuery(userMessage));
+      looksLikeProximityQuery(normalizedMessage) ||
+      looksLikeSummaryRequest(normalizedMessage) ||
+      Boolean(detectAmenityQuery(normalizedMessage));
     const effectiveIntent =
       lowConfidence &&
       ["availability", "inventory_availability", "amenity_inventory", "policy", "compare", "summary"].includes(
@@ -634,6 +854,15 @@ app.post("/chat", async (req, res) => {
       !heuristicSupports
         ? "general"
         : modelIntent;
+    const respond = (reply) => {
+      const voiced = applyReplyVoice(reply, {
+        intent: effectiveIntent,
+        policyIntent: policyIntentRaw,
+        userMessage,
+      });
+      if (/Book now:/i.test(voiced)) metrics.booking_link_replies += 1;
+      return res.json({ reply: voiced });
+    };
     if (effectiveIntent !== modelIntent) {
       metrics.intent_fallbacks += 1;
       setDebugHeader("IntentFallback", `${modelIntent}->${effectiveIntent}`);
@@ -649,11 +878,11 @@ app.post("/chat", async (req, res) => {
       modelConfidence,
     });
     setDebugHeader("PolicyIntent", policyIntentRaw);
-    const earlyAmenityIntent = detectAmenityKeyLoose(userMessage);
+    const earlyAmenityIntent = detectAmenityKeyLoose(normalizedMessage);
     let inventoryIntent =
-      isInventoryQuery(userMessage) ||
+      isInventoryQuery(normalizedMessage) ||
       ["inventory_availability", "amenity_inventory", "policy"].includes(effectiveIntent);
-    if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(userMessage)) {
+    if (session?.listingId && earlyAmenityIntent && !isInventoryQuery(normalizedMessage)) {
       inventoryIntent = false;
     }
     setDebugHeader("InventoryIntent", inventoryIntent);
@@ -662,6 +891,158 @@ app.post("/chat", async (req, res) => {
     const accessToken = tokenData.access_token;
 
     const listings = await getListingsCached(accessToken);
+    const recommendationIntent = detectRecommendationIntent(normalizedMessage);
+
+    const runRecommendations = async ({
+      capacity = null,
+      amenityKeys = [],
+      wantsPetFriendly = false,
+      unitType = null,
+      dates = null,
+    } = {}) => {
+      const requestedNights = dates ? nightsBetween(dates.start, dates.end) : null;
+      const safes = await mapWithConcurrency(
+        listings,
+        INVENTORY_AVAILABILITY_CONCURRENCY,
+        async (l) => {
+          try {
+            const full = await fetchListingByIdCached(l.id, accessToken);
+            const safe = toSafeListingFacts(full, { audience: "postbooking" });
+            if (unitType && !String(safe.name || "").toLowerCase().includes(unitType)) return null;
+            if (wantsPetFriendly && petPolicyFromRules(safe) !== "allowed") return null;
+            const score = scoreRecommendation(safe, { capacity, amenityKeys, wantsPetFriendly, unitType });
+            if (score < 0) return null;
+
+            let available = true;
+            if (dates) {
+              const endForCalendar = addDays(dates.end, -1);
+              const days = await fetchCalendarRange(safe.id, dates.start, endForCalendar, accessToken);
+              const summary = summarizeAvailabilityWithAlternatives(days, dates.start, dates.end);
+              available = summary?.available === true;
+            }
+            if (!available) return null;
+
+            return {
+              safe,
+              score,
+              reasons: explainRecommendationReasons(safe, {
+                capacity,
+                amenityKeys,
+                wantsPetFriendly,
+                unitType,
+              }),
+              requestedNights,
+            };
+          } catch (err) {
+            console.error("Recommendation error:", err);
+            return null;
+          }
+        }
+      );
+
+      return safes
+        .filter(Boolean)
+        .sort((a, b) => b.score - a.score || String(a.safe.name).localeCompare(String(b.safe.name)))
+        .slice(0, 3);
+    };
+
+    // Guided booking funnel mode: one question at a time.
+    if (/help me book|book a stay|plan my stay|find me a place/i.test(normalizedMessage)) {
+      setSession(sessionId, { funnel: { active: true, step: "dates", prefs: {} } });
+      return respond(
+        "Great — I can help you book. What dates are you looking at? " +
+          "Example: 2026-03-24 to 2026-03-26."
+      );
+    }
+
+    if (session?.funnel?.active) {
+      const funnel = session.funnel || { active: true, step: "dates", prefs: {} };
+      const prefs = { ...(funnel.prefs || {}) };
+
+      if (!prefs.dates) {
+        const parsedDates = extractDates(normalizedMessage);
+        if (!parsedDates) {
+          return respond("What dates should I check? Example: 2026-03-24 to 2026-03-26.");
+        }
+        prefs.dates = parsedDates;
+        setSession(sessionId, { funnel: { active: true, step: "guests", prefs } });
+        return respond("Got it. How many guests should I plan for?");
+      }
+
+      if (!prefs.capacity?.sleeps) {
+        const cap = extractCapacityQuery(normalizedMessage);
+        const guestMatch = normalizedMessage.match(/\b(\d+)\s*(guest|guests|people|persons?)\b/);
+        const sleeps = cap?.sleeps || (guestMatch ? Number(guestMatch[1]) : null);
+        if (!sleeps) {
+          return respond("How many guests are in your group?");
+        }
+        prefs.capacity = { ...(cap || {}), sleeps };
+      }
+
+      prefs.amenityKeys = detectAmenityKeys(normalizedMessage);
+      prefs.wantsPetFriendly = detectPetFriendlyFilter(normalizedMessage);
+      prefs.unitType = detectUnitType(normalizedMessage);
+
+      const recs = await runRecommendations({
+        capacity: prefs.capacity,
+        amenityKeys: prefs.amenityKeys,
+        wantsPetFriendly: prefs.wantsPetFriendly,
+        unitType: prefs.unitType,
+        dates: prefs.dates,
+      });
+      setSession(sessionId, { funnel: { active: false, step: "done", prefs } });
+      metrics.recommendation_queries += 1;
+      if (!recs.length) {
+        return respond(
+          "I couldn’t find a strong match for those details. " +
+            "Want me to try nearby dates or relax one preference?"
+        );
+      }
+
+      const lines = recs.map(
+        (r) =>
+          `• [${r.safe.name}](${r.safe.bookingUrl}?start=${prefs.dates.start}&end=${prefs.dates.end})` +
+          (r.reasons.length ? ` — ${r.reasons.join(", ")}` : "")
+      );
+      return respond(
+        `Best matches for ${prefs.dates.start} to ${prefs.dates.end}:\n\n${lines.join("\n")}\n\n` +
+          "Want me to compare these side by side?"
+      );
+    }
+
+    if (recommendationIntent && !listingId) {
+      metrics.recommendation_queries += 1;
+      const dates = extractDates(normalizedMessage);
+      const capacity = extractCapacityQuery(normalizedMessage);
+      const amenityKeys = detectAmenityKeys(normalizedMessage);
+      const wantsPetFriendly = detectPetFriendlyFilter(normalizedMessage);
+      const unitType = detectUnitType(normalizedMessage);
+      const recs = await runRecommendations({
+        capacity,
+        amenityKeys,
+        wantsPetFriendly,
+        unitType,
+        dates,
+      });
+
+      if (!recs.length) {
+        return respond("I couldn’t find a strong recommendation yet. Want me to check specific dates or guest count?");
+      }
+
+      const lines = recs.map((r) => {
+        const dateParams =
+          dates && r.safe.bookingUrl
+            ? `?start=${dates.start}&end=${dates.end}`
+            : "";
+        return (
+          `• [${r.safe.name}](${r.safe.bookingUrl}${dateParams})` +
+          (r.reasons.length ? ` — ${r.reasons.join(", ")}` : "")
+        );
+      });
+
+      const scope = dates ? ` for ${dates.start} to ${dates.end}` : "";
+      return respond(`Top picks${scope}:\n\n${lines.join("\n")}`);
+    }
 
     // ---------- INVENTORY-WIDE CAPACITY QUESTIONS ----------
     if (inventoryIntent) {
@@ -691,13 +1072,9 @@ app.post("/chat", async (req, res) => {
 
         const lines = results.filter(Boolean);
         if (lines.length === 0) {
-          return res.json({
-            reply: "I didn’t find any units that match that capacity.",
-          });
+          return respond("I didn’t find any units that match that capacity.");
         }
-        return res.json({
-          reply: `Units that match your request:\n\n${lines.join("\n")}`,
-        });
+        return respond(`Units that match your request:\n\n${lines.join("\n")}`);
       }
     }
 
@@ -723,26 +1100,22 @@ app.post("/chat", async (req, res) => {
 
       const lines = results.filter(Boolean);
       if (lines.length === 0) {
-        return res.json({
-          reply: "I don’t currently see any pet‑friendly units.",
-        });
+        return respond("I don’t currently see any pet‑friendly units.");
       }
 
       setSession(sessionId, {
         lastInventory: { type: "amenity", amenityKeys: [], unitType: null, petFriendly: true },
       });
 
-      return res.json({
-        reply: `Pet‑friendly units:\n\n${lines.join("\n")}`,
-      });
+      return respond(`Pet‑friendly units:\n\n${lines.join("\n")}`);
     }
 
     // Detect listing from message if not explicitly provided
     if (!listingId) {
-      const amenityIntent = detectAmenityQuery(userMessage);
+      const amenityIntent = detectAmenityQuery(normalizedMessage);
       const detected = inventoryIntent
-        ? findListingIdFromMessageStrong(userMessage, listings)
-        : findListingIdFromMessage(userMessage, listings);
+        ? findListingIdFromMessageStrong(normalizedMessage, listings)
+        : findListingIdFromMessage(normalizedMessage, listings);
       if (detected) {
         listingId = detected;
         setSession(sessionId, { listingId });
@@ -767,7 +1140,7 @@ app.post("/chat", async (req, res) => {
         listingId = session.listingId;
         memoryNote = "\n\n(Using your last unit from this session.)";
       } else if (session?.lastMessage && looksLikeSameMessageReference(userMessage)) {
-        const fromLast = findListingIdFromMessage(session.lastMessage, listings);
+        const fromLast = findListingIdFromMessage(normalizeUserMessage(session.lastMessage), listings);
         if (fromLast) {
           listingId = fromLast;
           setSession(sessionId, { listingId });
@@ -784,12 +1157,13 @@ app.post("/chat", async (req, res) => {
         effectiveIntent === "inventory_availability" ||
         followupInventory?.type === "availability")
     ) {
-      let dates = extractDates(userMessage);
+      let dates = extractDates(normalizedMessage);
       if (!dates && followupInventory?.type === "availability" && followupInventory?.dates) {
         dates = followupInventory.dates;
       }
       const unitType =
-        detectUnitType(userMessage) || (followupInventory?.type === "availability" ? followupInventory.unitType : null);
+        detectUnitType(normalizedMessage) ||
+        (followupInventory?.type === "availability" ? followupInventory.unitType : null);
       if (unitType) setDebugHeader("UnitType", unitType);
       if (dates) {
         setDebugHeader("Dates", `${dates.start}..${dates.end}`);
@@ -845,12 +1219,12 @@ app.post("/chat", async (req, res) => {
           unitType: unitType || null,
           availableCount: 0,
         });
-        return res.json({
-          reply: appendFollowupIfMissing(
+        return respond(
+          appendFollowupIfMissing(
             `I didn’t find any available${typeLabel} for ${dates.start} to ${dates.end}.`,
             "Want me to check other dates or unit types?"
-          ),
-        });
+          )
+        );
       }
 
       const total = lines.length;
@@ -869,12 +1243,12 @@ app.post("/chat", async (req, res) => {
         unitType: unitType || null,
         availableCount: shown.length,
       });
-      return res.json({
-        reply: appendFollowupIfMissing(
+      return respond(
+        appendFollowupIfMissing(
           `Available units for ${dates.start} to ${dates.end}${label}:\n\n${shown.join("\n")}${more}`,
           "Want me to check other dates or unit types?"
-        ),
-      });
+        )
+      );
     }
 
     // If user mentions another listing, allow session primary to pair with it
@@ -917,7 +1291,7 @@ app.post("/chat", async (req, res) => {
           primaryId,
           secondaryId,
         });
-        return res.json({ reply: buildComparison(primarySafe, secondarySafe) });
+        return respond(buildComparison(primarySafe, secondarySafe, userMessage));
       }
 
       const sameCity =
@@ -964,26 +1338,25 @@ app.post("/chat", async (req, res) => {
         primaryId: displayPrimary?.id || primaryId,
         secondaryId: displaySecondary?.id || secondaryId,
       });
-      return res.json({
-        reply:
-          `${locationLine}\n\n` +
+      return respond(
+        `${locationLine}\n\n` +
           `[${displayPrimary.name}](${displayPrimary.bookingUrl})\n` +
-          `[${displaySecondary.name}](${displaySecondary.bookingUrl})`,
-      });
+          `[${displaySecondary.name}](${displaySecondary.bookingUrl})`
+      );
     }
 
     // ---------- INVENTORY-WIDE AMENITY QUESTIONS ----------
     if (!listingId || followupAmenityKey) {
-      let amenityKeys = detectAmenityKeys(userMessage);
-      let unitType = detectUnitType(userMessage);
-      let wantsPetFriendly = detectPetFriendlyFilter(userMessage);
+      let amenityKeys = detectAmenityKeys(normalizedMessage);
+      let unitType = detectUnitType(normalizedMessage);
+      let wantsPetFriendly = detectPetFriendlyFilter(normalizedMessage);
       const looksLikeListRequest = /\b(which|what|list|show|any)\b/.test(
         (userMessage || "").toLowerCase()
       );
       const skipAmenityInventory =
         policyIntentRaw === "pets" && !looksLikeListRequest && !amenityKeys.length && !unitType;
       const availabilityAsked =
-        isAvailabilityQuestion(userMessage) ||
+        isAvailabilityQuestion(normalizedMessage) ||
         effectiveIntent === "availability" ||
         session?.lastIntent === "availability";
 
@@ -999,7 +1372,7 @@ app.post("/chat", async (req, res) => {
         }
       }
 
-      const amenityKey = detectAmenityQuery(userMessage) || followupAmenityKey;
+      const amenityKey = detectAmenityQuery(normalizedMessage) || followupAmenityKey;
 
       if (
         amenityKeys.length > 0 ||
@@ -1020,6 +1393,23 @@ app.post("/chat", async (req, res) => {
           (looksLikeListRequest || amenityKeys.length || unitType || effectiveIntent === "amenity_inventory")
         ) {
         const effectiveAmenityKeys = amenityKeys.length ? amenityKeys : amenityKey ? [amenityKey] : [];
+        const unsupportedTerms = extractUnsupportedAmenityTerms(normalizedMessage);
+        if (unsupportedTerms.length > 0) {
+          return respond(
+            `I can’t reliably filter by ${unsupportedTerms.map((t) => `"${t}"`).join(", ")} yet. ` +
+              "I can filter by hot tubs, jacuzzis, pools, fireplaces, and saunas."
+          );
+        }
+        const unsupportedAmenityFilter =
+          effectiveAmenityKeys.length === 0 &&
+          !wantsPetFriendly &&
+          looksLikeAmenityFilterWithoutSupportedAmenity(normalizedMessage);
+        if (unsupportedAmenityFilter) {
+          return respond(
+            "I can filter units by hot tubs, jacuzzis, pools, fireplaces, and saunas right now. " +
+              "Which amenity would you like me to use?"
+          );
+        }
         if (effectiveAmenityKeys.length) {
           setDebugHeader("AmenityKeys", effectiveAmenityKeys.join(","));
         }
@@ -1063,9 +1453,7 @@ app.post("/chat", async (req, res) => {
           if (wantsPetFriendly) parts.push("pet‑friendly");
           if (unitType) parts.push(unitType);
           const label = parts.length ? parts.join(", ") : "that";
-          return res.json({
-            reply: `I didn’t find any units matching ${label}.`,
-          });
+          return respond(`I didn’t find any units matching ${label}.`);
         }
 
         const lines = matches
@@ -1079,9 +1467,7 @@ app.post("/chat", async (req, res) => {
         if (unitType) labelParts.push(unitType);
         const label = labelParts.length ? ` (${labelParts.join(", ")})` : "";
 
-        return res.json({
-          reply: `Units with${label}:\n\n${lines}`,
-        });
+        return respond(`Units with${label}:\n\n${lines}`);
         }
       }
     }
@@ -1138,21 +1524,19 @@ app.post("/chat", async (req, res) => {
             });
             const uniform = nonNull.length === listings.length && counts.size === 1;
             if (uniform) {
-              return res.json({ reply: generalized });
+              return respond(generalized);
             }
             if (policyIntent === "pets") {
-              return res.json({
-                reply:
-                  `${generalized}\n\n` +
-                  "Pet policies can vary by unit. Do you have a specific unit you'd like me to check, " +
-                  "or would you like a list of pet‑friendly units?",
-              });
-            }
-            return res.json({
-              reply:
+              return respond(
                 `${generalized}\n\n` +
-                "Policies can vary by unit. Do you have a specific unit you'd like me to check?",
-            });
+                  "Pet policies can vary by unit. Do you have a specific unit you'd like me to check, " +
+                  "or would you like a list of pet‑friendly units?"
+              );
+            }
+            return respond(
+              `${generalized}\n\n` +
+                "Policies can vary by unit. Do you have a specific unit you'd like me to check?"
+            );
           }
         }
       }
@@ -1178,24 +1562,24 @@ app.post("/chat", async (req, res) => {
     const wantsNextAvailableWeekend =
       listingId &&
       /\bnext available weekend\b|\bnext weekend available\b|\bwhen.*next weekend\b|\bnext weekend\b.*\bavailable\b/i.test(
-        userMessage
+        normalizedMessage
       );
 
     // If availability question AND user gave dates -> answer from Hostaway truth
     const availabilityAsked =
-      isAvailabilityQuestion(userMessage) ||
+      isAvailabilityQuestion(normalizedMessage) ||
       effectiveIntent === "availability" ||
       session?.lastIntent === "availability";
     if (availabilityAsked) metrics.availability_queries += 1;
-    let dates = extractDates(userMessage);
+    let dates = extractDates(normalizedMessage);
     if (
       !dates &&
-      (isAvailabilityQuestion(userMessage) ||
+      (isAvailabilityQuestion(normalizedMessage) ||
         effectiveIntent === "availability" ||
         session?.lastIntent === "availability") &&
       session?.dates
     ) {
-      if (looksLikeSameDatesReference(userMessage)) {
+      if (looksLikeSameDatesReference(normalizedMessage)) {
         dates = session.dates;
       }
     }
@@ -1217,23 +1601,21 @@ app.post("/chat", async (req, res) => {
           const suggestUrl = `${safe.bookingUrl}?start=${next.start}&end=${next.suggestedEnd}`;
           suggestLine = `\n\nSuggested stay: ${next.start} to ${next.suggestedEnd}\nBook now: ${suggestUrl}`;
         }
-        return res.json({
-          reply:
-            `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${bookUrl}` +
+        return respond(
+          `Next available weekend is ${next.start} to ${next.end}${note}.\n\nBook now: ${bookUrl}` +
             suggestLine +
-            memoryNote,
-          });
+            memoryNote
+        );
       }
-      return res.json({
-        reply:
-          "I couldn’t find an available weekend in the next few months. " +
+      return respond(
+        "I couldn’t find an available weekend in the next few months. " +
           "If you have specific dates in mind, I can check those." +
-          memoryNote,
-      });
+          memoryNote
+      );
     }
     if (
       dates &&
-      (isAvailabilityQuestion(userMessage) ||
+      (isAvailabilityQuestion(normalizedMessage) ||
         effectiveIntent === "availability" ||
         session?.lastIntent === "availability")
     ) {
@@ -1261,13 +1643,33 @@ app.post("/chat", async (req, res) => {
         bookUrl = `${safe.bookingUrl}${sep}start=${dates.start}&end=${dates.end}`;
       }
 
-      const details = shouldIncludeAvailabilityDetails(userMessage, policyIntentRaw, data?.reasonCode);
+      const details = shouldIncludeAvailabilityDetails(normalizedMessage, policyIntentRaw, data?.reasonCode);
       const timeLine = details.includeTimes ? formatCheckTimes(safe) : "";
       const minStayLine =
         details.includeMinStay && safe.minNights != null
           ? `Minimum stay: ${safe.minNights} ${safe.minNights === 1 ? "night" : "nights"}.`
           : "";
       const extraLines = [timeLine, minStayLine].filter(Boolean).join("\n");
+      let flexLine = "";
+      if (data?.available === false) {
+        const desiredNights = nightsBetween(dates.start, dates.end);
+        const flexEnd = addDays(dates.start, 90);
+        const flexDays = await fetchCalendarRange(listingId, dates.start, flexEnd, accessToken);
+        const alternatives = findAlternativeStays(flexDays, dates.start, desiredNights, 5, 3);
+        if (alternatives.length) {
+          const altLines = alternatives.map((a) => {
+            const url = `${safe.bookingUrl}?start=${a.start}&end=${a.end}`;
+            return `• ${a.start} to ${a.end} (${a.nights} nights) — ${url}`;
+          });
+          flexLine = `\n\nClosest alternatives:\n${altLines.join("\n")}`;
+        }
+      }
+      const evidenceLine = wantsEvidenceLine(normalizedMessage)
+        ? buildEvidenceLine({
+            confidence: data?.available ? "high" : "medium",
+            source: "Hostaway calendar (read-only)",
+          })
+        : "";
 
       const bookingLine = bookUrl ? `\n\nBook now: ${bookUrl}` : "";
       logEvent("availability_response", {
@@ -1278,19 +1680,21 @@ app.post("/chat", async (req, res) => {
         available: Boolean(data?.available),
         reasonCode: data?.reasonCode || "unknown",
       });
-      return res.json({
-        reply: appendFollowupIfMissing(
+      return respond(
+        appendFollowupIfMissing(
           (data.message || "Availability check complete.") +
             (extraLines ? `\n${extraLines}` : "") +
+            flexLine +
             bookingLine +
+            evidenceLine +
             memoryNote,
           "Would you like me to check other dates?"
-        ),
-      });
+        )
+      );
     }
 
     // Listing-level amenity questions
-    const listingAmenityKey = listingId ? detectAmenityKeyLoose(userMessage) : null;
+    const listingAmenityKey = listingId ? detectAmenityKeyLoose(normalizedMessage) : null;
     if (listingId && listingAmenityKey) {
       const listing = await fetchListingById(listingId, accessToken);
       const safe = toSafeListingFacts(listing, { audience: "postbooking" });
@@ -1298,7 +1702,7 @@ app.post("/chat", async (req, res) => {
       const reply = has
         ? `Yes — ${safe.name} has a ${listingAmenityKey}.`
         : `No — ${safe.name} does not have a ${listingAmenityKey}.`;
-      return res.json({ reply: reply + `\n\nBook now: ${safe.bookingUrl}` + memoryNote });
+      return respond(reply + `\n\nBook now: ${safe.bookingUrl}` + memoryNote);
     }
 
     // General Q&A: Fetch listing and build safe facts
@@ -1307,13 +1711,13 @@ app.post("/chat", async (req, res) => {
     const safeFactsText = JSON.stringify(safe, null, 2);
 
     const wantsBookingLink =
-      isAvailabilityQuestion(userMessage) ||
+      isAvailabilityQuestion(normalizedMessage) ||
       /\b(book|booking|reserve|reservation|availability|available|check[- ]?in|check[- ]?out|checkout|checkin)\b/i.test(
-        userMessage
+        normalizedMessage
       );
 
-    let policyIntent = detectPolicyIntent(userMessage);
-    if (!policyIntent && looksLikeFollowupQuestion(userMessage) && session?.lastPolicyIntent) {
+    let policyIntent = detectPolicyIntent(normalizedMessage);
+    if (!policyIntent && looksLikeFollowupQuestion(normalizedMessage) && session?.lastPolicyIntent) {
       policyIntent = session.lastPolicyIntent;
     }
     if (policyIntent) {
@@ -1323,6 +1727,10 @@ app.post("/chat", async (req, res) => {
       const fromFacts = policyAnswerFromFacts(safe, policyIntent);
       const policyReply = fromRules || fromFacts;
       if (policyReply) {
+        const evidenceSource = fromRules ? "listing house rules/tags/public fields" : "listing check-in/out facts";
+        const evidenceLine = wantsEvidenceLine(normalizedMessage)
+          ? buildEvidenceLine({ confidence: "high", source: evidenceSource })
+          : "";
         const bookingLine =
           safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
         logEvent("policy_response", {
@@ -1330,21 +1738,21 @@ app.post("/chat", async (req, res) => {
           listingId,
           policy: policyIntent,
         });
-        res.json({
-          reply: appendFollowupIfMissing(
-            policyReply + bookingLine + memoryNote,
+        respond(
+          appendFollowupIfMissing(
+            policyReply + bookingLine + evidenceLine + memoryNote,
             "Want me to check a different unit?"
-          ),
-        });
+          )
+        );
         return;
       }
     }
 
-    if (looksLikeSummaryRequest(userMessage) || effectiveIntent === "summary") {
+    if (looksLikeSummaryRequest(normalizedMessage) || effectiveIntent === "summary") {
       const bookingLine =
         safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
       setSession(sessionId, { lastMessage: userMessage });
-      res.json({ reply: buildSafeSummary(safe) + bookingLine + memoryNote });
+      respond(buildSafeSummary(safe) + bookingLine + memoryNote);
       return;
     }
 
@@ -1355,6 +1763,8 @@ app.post("/chat", async (req, res) => {
         instructions:
           "You are a customer service assistant for AmishCountryLodging.com. " +
           "Write in a warm, conversational tone. " +
+          "Global policy guardrails: smoking is not allowed and parties/events are not allowed at any unit. " +
+          "Never contradict these global policies. " +
           "Only answer using the UNIT DATA provided. " +
           "If the unit is unclear, ask which unit they mean. " +
           "Never reveal passwords, door codes, WiFi credentials, or private instructions. " +
@@ -1384,7 +1794,10 @@ app.post("/chat", async (req, res) => {
 
     const bookingLine =
       safe.bookingUrl && wantsBookingLink ? `\n\nBook now: ${safe.bookingUrl}` : "";
-    res.json({ reply: aiText + bookingLine + memoryNote });
+    const aiEvidenceLine = wantsEvidenceLine(normalizedMessage)
+      ? buildEvidenceLine({ confidence: "medium", source: "unit safe facts" })
+      : "";
+    respond(aiText + bookingLine + aiEvidenceLine + memoryNote);
     setSession(sessionId, { lastMessage: userMessage });
   } catch (err) {
     console.error(err);
