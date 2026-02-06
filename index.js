@@ -1214,14 +1214,32 @@ app.post("/chat", async (req, res) => {
     setDebugHeader("ListingId", listingId);
 
     // ---------- INVENTORY-WIDE AVAILABILITY QUESTIONS ----------
+    const hasAmenityFollowupSignal =
+      Boolean(detectAmenityQuery(normalizedMessage)) ||
+      detectAmenityKeys(normalizedMessage).length > 0 ||
+      Boolean(detectPetFriendlyFilter(normalizedMessage));
+    const looksLikeDateShiftFollowup =
+      /\b(next|this)\s+weekend\b|\binstead\b|\banother\b\s+\b(date|weekend|range)\b|\bother\b\s+\b(date|dates)\b/i.test(
+        normalizedMessage
+      );
+    const inventoryFollowupAvailability =
+      looksLikeFollowupQuestion(userMessage) &&
+      (isAvailabilityQuestion(normalizedMessage) || looksLikeDateShiftFollowup) &&
+      Boolean(session?.lastInventory);
+
     if (
       !listingId &&
       (isInventoryAvailabilityQuestion(userMessage) ||
         effectiveIntent === "inventory_availability" ||
-        followupInventory?.type === "availability")
+        (followupInventory?.type === "availability" && !hasAmenityFollowupSignal) ||
+        inventoryFollowupAvailability)
     ) {
       let dates = extractDates(normalizedMessage);
-      if (!dates && followupInventory?.type === "availability" && followupInventory?.dates) {
+      if (
+        !dates &&
+        (followupInventory?.type === "availability" || inventoryFollowupAvailability) &&
+        followupInventory?.dates
+      ) {
         dates = followupInventory.dates;
       }
       const unitType =

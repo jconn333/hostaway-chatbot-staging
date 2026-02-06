@@ -32,6 +32,10 @@
 - Deep 3-4 turn chains in one session:
   - availability -> month-weekend follow-up -> amenity -> check-in time
   - generic pet policy -> pet-friendly list -> named unit follow-up -> smoking follow-up
+- Deep 8-turn chains in one session:
+  - unit detail -> amenity -> availability -> month pivot -> check-in/out -> policy pivot -> inventory pivot
+  - inventory availability -> unit filter pivot -> amenity filter pivot -> policy follow-up -> unit-specific follow-up
+  - ambiguity -> disambiguation -> date follow-up -> proximity -> policy -> booking CTA
 
 ## Monitoring
 - `GET /healthz`

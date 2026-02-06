@@ -3,318 +3,845 @@
     "name": "availability-weekend",
     "sessionId": "golden-weekend",
     "message": "Is red fern available this weekend?",
-    "expectIncludes": ["Book now:"],
+    "expectIncludes": [
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "next-weekend",
     "sessionId": "golden-weekend",
     "message": "When is the next weekend it is available?",
-    "expectOneOfIncludes": ["Next available weekend is", "I couldn't find an available weekend"],
+    "expectOneOfIncludes": [
+      "Next available weekend is",
+      "I couldn't find an available weekend"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-followup",
     "sessionId": "golden-weekend",
     "message": "does it have a hot tub?",
-    "expectIncludes": ["Red Fern Cabin", "hot tub"],
+    "expectIncludes": [
+      "Red Fern Cabin",
+      "hot tub"
+    ],
     "expectRegex": []
   },
   {
     "name": "joy-two-nights",
     "sessionId": "golden-joy",
     "message": "Looking to book Joy Lodge Suite Feb 7 for two nights - available?",
-    "expectIncludes": ["2026-02-07", "Book now:"],
+    "expectIncludes": [
+      "2026-02-07",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "pet-policy-generic",
     "sessionId": "golden-policy",
     "message": "Do you allow pets?",
-    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets are allowed"],
+    "expectOneOfIncludes": [
+      "Pet policies can vary",
+      "Pets aren't allowed",
+      "Pets are allowed"
+    ],
     "expectRegex": []
   },
   {
     "name": "pet-friendly-suites",
     "sessionId": "golden-pets",
     "message": "Which suites are pet friendly?",
-    "expectIncludes": ["Units with", "Suite"],
+    "expectIncludes": [
+      "Units with",
+      "Suite"
+    ],
     "expectRegex": []
   },
   {
     "name": "multi-constraint-amenity",
     "sessionId": "golden-amenities",
     "message": "Which cabins have fireplaces and hot tubs?",
-    "expectIncludes": ["Units with"],
+    "expectIncludes": [
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "multi-constraint-pet-amenity",
     "sessionId": "golden-amenities",
     "message": "Which units are pet friendly and have a hot tub?",
-    "expectIncludes": ["Units with"],
+    "expectIncludes": [
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "inventory-availability",
     "sessionId": "golden-inventory",
     "message": "Which units are available Feb 7 to Feb 9?",
-    "expectIncludes": ["Available units for 2026-02-07 to 2026-02-09"],
+    "expectIncludes": [
+      "Available units for 2026-02-07 to 2026-02-09"
+    ],
     "expectRegex": []
   },
   {
     "name": "inventory-followup",
     "sessionId": "golden-inventory",
     "message": "What about that?",
-    "expectIncludes": ["Available units for 2026-02-07 to 2026-02-09"],
+    "expectIncludes": [
+      "Available units for 2026-02-07 to 2026-02-09"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-soft-ask",
     "sessionId": "golden-soft",
     "message": "Thinking about a weekend at Red Fern — any openings?",
-    "expectIncludes": ["Book now:"],
+    "expectIncludes": [
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-date-phrase",
     "sessionId": "golden-soft",
     "message": "Can I get Red Fern for April 1 for two nights?",
-    "expectIncludes": ["2026-04-01", "Book now:"],
+    "expectIncludes": [
+      "2026-04-01",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-synonym-jacuzzi",
     "sessionId": "golden-amenity-syn",
     "message": "Does Red Fern have a jacuzzi?",
-    "expectOneOfIncludes": ["Red Fern Cabin", "jacuzzi", "hot tub"],
+    "expectOneOfIncludes": [
+      "Red Fern Cabin",
+      "jacuzzi",
+      "hot tub"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-followup-clarify",
     "sessionId": "golden-amenity-syn",
     "message": "What about a fireplace?",
-    "expectOneOfIncludes": ["Red Fern Cabin", "fireplace"],
+    "expectOneOfIncludes": [
+      "Red Fern Cabin",
+      "fireplace"
+    ],
     "expectRegex": []
   },
   {
     "name": "policy-followup",
     "sessionId": "golden-policy",
     "message": "Okay, which ones do allow pets then?",
-    "expectOneOfIncludes": ["Pet‑friendly units:", "Pet-friendly units:", "Units with"],
+    "expectOneOfIncludes": [
+      "Pet‑friendly units:",
+      "Pet-friendly units:",
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "booking-followup",
     "sessionId": "golden-soft",
     "message": "Cool — can you book it for me?",
-    "expectOneOfIncludes": ["Book now:", "booking link"],
+    "expectOneOfIncludes": [
+      "Book now:",
+      "booking link"
+    ],
     "expectRegex": []
   },
   {
     "name": "inventory-variant",
     "sessionId": "golden-inventory",
     "message": "Which units are open Feb 8–Feb 10?",
-    "expectIncludes": ["2026-02-08", "2026-02-10"],
+    "expectIncludes": [
+      "2026-02-08",
+      "2026-02-10"
+    ],
     "expectRegex": []
   },
   {
     "name": "disambiguation",
     "sessionId": "golden-disambig",
     "message": "Is the lodge available next weekend?",
-    "expectIncludes": ["Which unit are you asking about?", "Possible matches"],
+    "expectIncludes": [
+      "Which unit are you asking about?",
+      "Possible matches"
+    ],
     "expectRegex": []
   },
   {
     "name": "disambiguation-followup",
     "sessionId": "golden-disambig",
     "message": "Joy Lodge Suite",
-    "expectOneOfIncludes": ["Joy Lodge Suite", "Book now:"],
+    "expectOneOfIncludes": [
+      "Joy Lodge Suite",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "policy-smoking",
     "sessionId": "golden-policy",
     "message": "Is smoking allowed?",
-    "expectOneOfIncludes": ["smoking", "Smoking", "non‑smoking", "no smoking"],
+    "expectOneOfIncludes": [
+      "smoking",
+      "Smoking",
+      "non‑smoking",
+      "no smoking"
+    ],
     "expectRegex": []
   },
   {
     "name": "policy-parties",
     "sessionId": "golden-policy",
     "message": "Are parties allowed?",
-    "expectOneOfIncludes": ["parties", "Parties", "party", "aren’t allowed", "not allowed"],
+    "expectOneOfIncludes": [
+      "parties",
+      "Parties",
+      "party",
+      "aren’t allowed",
+      "not allowed"
+    ],
     "expectRegex": []
   },
   {
     "name": "checkin-time",
     "sessionId": "golden-joy",
     "message": "What time is check-in for Joy Lodge Suite?",
-    "expectOneOfIncludes": ["Check‑in", "Check-in"],
+    "expectOneOfIncludes": [
+      "Check‑in",
+      "Check-in"
+    ],
     "expectRegex": []
   },
   {
     "name": "checkout-time",
     "sessionId": "golden-joy",
     "message": "And checkout?",
-    "expectOneOfIncludes": ["Check‑out", "Check-out"],
+    "expectOneOfIncludes": [
+      "Check‑out",
+      "Check-out"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-inventory-fireplace",
     "sessionId": "golden-amenities",
     "message": "Which units have fireplaces?",
-    "expectIncludes": ["Units with"],
+    "expectIncludes": [
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-inventory-jacuzzi",
     "sessionId": "golden-amenities",
     "message": "Which units have a jacuzzi?",
-    "expectIncludes": ["Units with"],
+    "expectIncludes": [
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "booking-short",
     "sessionId": "golden-soft",
     "message": "Can I reserve Red Fern for next weekend?",
-    "expectOneOfIncludes": ["Book now:", "availability"],
+    "expectOneOfIncludes": [
+      "Book now:",
+      "availability"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-tonight",
     "sessionId": "golden-edge",
     "message": "Is Red Fern available tonight?",
-    "expectIncludes": ["Book now:"],
+    "expectIncludes": [
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-tomorrow",
     "sessionId": "golden-edge",
     "message": "Is Red Fern available tomorrow night?",
-    "expectIncludes": ["Book now:"],
+    "expectIncludes": [
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-3-nights",
     "sessionId": "golden-edge",
     "message": "Can I book Joy Lodge Suite for 3 nights starting Feb 10?",
-    "expectIncludes": ["2026-02-10", "Book now:"],
+    "expectIncludes": [
+      "2026-02-10",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "availability-2-nights-phrased",
     "sessionId": "golden-edge",
     "message": "Need Joy Lodge Suite Feb 12 for two nights — available?",
-    "expectIncludes": ["2026-02-12", "Book now:"],
+    "expectIncludes": [
+      "2026-02-12",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "policy-pets-followup",
     "sessionId": "golden-policy",
     "message": "Do you allow dogs?",
-    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets aren’t allowed"],
+    "expectOneOfIncludes": [
+      "Pet policies can vary",
+      "Pets aren't allowed",
+      "Pets aren’t allowed"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-jetted-tub",
     "sessionId": "golden-amenity-syn",
     "message": "Does Red Fern have a jetted tub?",
-    "expectOneOfIncludes": ["Red Fern Cabin", "jetted tub", "jacuzzi", "hot tub"],
+    "expectOneOfIncludes": [
+      "Red Fern Cabin",
+      "jetted tub",
+      "jacuzzi",
+      "hot tub"
+    ],
     "expectRegex": []
   },
   {
     "name": "amenity-hot-tub-inventory",
     "sessionId": "golden-amenities",
     "message": "Which units have hot tubs?",
-    "expectIncludes": ["Units with"],
+    "expectIncludes": [
+      "Units with"
+    ],
     "expectRegex": []
   },
   {
     "name": "proximity-question",
     "sessionId": "golden-proximity",
     "message": "Is Red Fern close to Water Lily Cabin?",
-    "expectOneOfIncludes": ["miles apart", "same location", "different locations"],
+    "expectOneOfIncludes": [
+      "miles apart",
+      "same location",
+      "different locations"
+    ],
     "expectRegex": []
   },
   {
     "name": "comparison-question",
     "sessionId": "golden-compare",
     "message": "Compare Red Fern Cabin and Water Lily Cabin.",
-    "expectOneOfIncludes": ["Key differences", "Red Fern Cabin", "Water Lily Cabin"],
+    "expectOneOfIncludes": [
+      "Key differences",
+      "Red Fern Cabin",
+      "Water Lily Cabin"
+    ],
     "expectRegex": []
   },
   {
     "name": "inventory-suites-tonight",
     "sessionId": "golden-edge",
     "message": "Which suites are available tonight?",
-    "expectOneOfIncludes": ["(suites)", "Available units"],
+    "expectOneOfIncludes": [
+      "(suites)",
+      "Available units"
+    ],
     "expectRegex": []
   },
   {
     "name": "inventory-cabins-range",
     "sessionId": "golden-edge",
     "message": "Which cabins are available Feb 7 to Feb 9?",
-    "expectOneOfIncludes": ["(cabins)", "Available units", "didn’t find any available units", "available cabins"],
+    "expectOneOfIncludes": [
+      "(cabins)",
+      "Available units",
+      "didn’t find any available units",
+      "available cabins"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-treehouse-weekend-1",
     "sessionId": "golden-deep-treehouse",
     "message": "Is treehouse 3 available next weekend?",
-    "expectOneOfIncludes": ["Treehouse #3", "Book now:", "already booked", "available"],
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "Book now:",
+      "already booked",
+      "available"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-treehouse-weekend-2",
     "sessionId": "golden-deep-treehouse",
     "message": "Yes how about a weekend in March?",
-    "expectIncludes": ["Treehouse #3"],
-    "expectOneOfIncludes": ["Available weekends in March", "couldn’t find an available weekend in March"],
+    "expectIncludes": [
+      "Treehouse #3"
+    ],
+    "expectOneOfIncludes": [
+      "Available weekends in March",
+      "couldn’t find an available weekend in March"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-treehouse-weekend-3",
     "sessionId": "golden-deep-treehouse",
     "message": "Does it have a hot tub?",
-    "expectIncludes": ["Treehouse #3"],
-    "expectOneOfIncludes": ["hot tub", "does not have", "doesn't have"],
+    "expectIncludes": [
+      "Treehouse #3"
+    ],
+    "expectOneOfIncludes": [
+      "hot tub",
+      "does not have",
+      "doesn't have"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-treehouse-weekend-4",
     "sessionId": "golden-deep-treehouse",
     "message": "What time is check in?",
-    "expectOneOfIncludes": ["Check‑in", "Check-in"],
+    "expectOneOfIncludes": [
+      "Check‑in",
+      "Check-in"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-policy-chain-1",
     "sessionId": "golden-deep-policy",
     "message": "Do you allow pets?",
-    "expectOneOfIncludes": ["Pet policies can vary", "Pets aren't allowed", "Pets are allowed"],
+    "expectOneOfIncludes": [
+      "Pet policies can vary",
+      "Pets aren't allowed",
+      "Pets are allowed"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-policy-chain-2",
     "sessionId": "golden-deep-policy",
     "message": "Which ones allow pets?",
-    "expectOneOfIncludes": ["Pet‑friendly units:", "Pet-friendly units:"],
+    "expectOneOfIncludes": [
+      "Pet‑friendly units:",
+      "Pet-friendly units:"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-policy-chain-3",
     "sessionId": "golden-deep-policy",
     "message": "What about Joy Lodge Suite?",
-    "expectIncludes": ["Joy Lodge Suite"],
-    "expectOneOfIncludes": ["pets", "Pet", "Book now:"],
+    "expectIncludes": [
+      "Joy Lodge Suite"
+    ],
+    "expectOneOfIncludes": [
+      "pets",
+      "Pet",
+      "Book now:"
+    ],
     "expectRegex": []
   },
   {
     "name": "deep-policy-chain-4",
     "sessionId": "golden-deep-policy",
     "message": "And smoking?",
-    "expectOneOfIncludes": ["smoking", "non‑smoking", "non-smoking", "no smoking"],
+    "expectOneOfIncludes": [
+      "smoking",
+      "non‑smoking",
+      "non-smoking",
+      "no smoking"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-1",
+    "sessionId": "golden-deep-redfern",
+    "message": "Tell me about Red Fern Cabin.",
+    "expectIncludes": [
+      "Red Fern Cabin"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-2",
+    "sessionId": "golden-deep-redfern",
+    "message": "Does it have a hot tub?",
+    "expectIncludes": [
+      "Red Fern Cabin"
+    ],
+    "expectOneOfIncludes": [
+      "hot tub",
+      "does not have"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-3",
+    "sessionId": "golden-deep-redfern",
+    "message": "Is it available next weekend?",
+    "expectOneOfIncludes": [
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-4",
+    "sessionId": "golden-deep-redfern",
+    "message": "What about a weekend in March?",
+    "expectOneOfIncludes": [
+      "Available weekends in March",
+      "couldn’t find an available weekend in March",
+      "couldn't find an available weekend in March"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-5",
+    "sessionId": "golden-deep-redfern",
+    "message": "What time is check in and check out?",
+    "expectOneOfIncludes": [
+      "Check-in",
+      "Check‑in",
+      "Check-out",
+      "Check‑out"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-6",
+    "sessionId": "golden-deep-redfern",
+    "message": "Are pets allowed there?",
+    "expectOneOfIncludes": [
+      "Red Fern Cabin",
+      "pets",
+      "pet-friendly"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-7",
+    "sessionId": "golden-deep-redfern",
+    "message": "Which units do allow pets?",
+    "expectOneOfIncludes": [
+      "Pet‑friendly units:",
+      "Pet-friendly units:"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-redfern-chain-8",
+    "sessionId": "golden-deep-redfern",
+    "message": "Which ones have hot tubs too?",
+    "expectOneOfIncludes": [
+      "Units with",
+      "hot tub"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-1",
+    "sessionId": "golden-deep-grace",
+    "message": "Is Grace Lodge Suite available Feb 20 for 2 nights?",
+    "expectIncludes": [
+      "2026-02-20"
+    ],
+    "expectOneOfIncludes": [
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-2",
+    "sessionId": "golden-deep-grace",
+    "message": "If not, what about Feb 27 for 2 nights?",
+    "expectOneOfIncludes": [
+      "2026-02-27",
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-3",
+    "sessionId": "golden-deep-grace",
+    "message": "Does it have a fireplace?",
+    "expectIncludes": [
+      "Grace Lodge Suite"
+    ],
+    "expectOneOfIncludes": [
+      "fireplace",
+      "does not have"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-4",
+    "sessionId": "golden-deep-grace",
+    "message": "And a hot tub?",
+    "expectIncludes": [
+      "Grace Lodge Suite"
+    ],
+    "expectOneOfIncludes": [
+      "hot tub",
+      "does not have"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-5",
+    "sessionId": "golden-deep-grace",
+    "message": "How far is it from Joy Lodge Suite?",
+    "expectOneOfIncludes": [
+      "miles apart",
+      "same location",
+      "different locations"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-6",
+    "sessionId": "golden-deep-grace",
+    "message": "Compare Grace Lodge Suite and Joy Lodge Suite.",
+    "expectOneOfIncludes": [
+      "Key differences",
+      "Grace Lodge Suite",
+      "Joy Lodge Suite"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-7",
+    "sessionId": "golden-deep-grace",
+    "message": "Are parties allowed?",
+    "expectOneOfIncludes": [
+      "parties",
+      "not allowed",
+      "aren’t allowed"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-grace-chain-8",
+    "sessionId": "golden-deep-grace",
+    "message": "And smoking?",
+    "expectOneOfIncludes": [
+      "smoking",
+      "non-smoking",
+      "non‑smoking"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-1",
+    "sessionId": "golden-deep-inventory",
+    "message": "Which suites are available Feb 14 to Feb 16?",
+    "expectOneOfIncludes": [
+      "Available units for 2026-02-14 to 2026-02-16",
+      "didn’t find any available",
+      "didn't find any available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-2",
+    "sessionId": "golden-deep-inventory",
+    "message": "What about cabins for the same dates?",
+    "expectOneOfIncludes": [
+      "2026-02-14",
+      "2026-02-16",
+      "Available units",
+      "didn’t find any available",
+      "didn't find any available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-3",
+    "sessionId": "golden-deep-inventory",
+    "message": "Which of those have fireplaces?",
+    "expectOneOfIncludes": [
+      "Units with",
+      "fireplace",
+      "I didn’t find any units matching",
+      "I didn't find any units matching",
+      "Available units for"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-4",
+    "sessionId": "golden-deep-inventory",
+    "message": "Any pet-friendly ones?",
+    "expectOneOfIncludes": [
+      "Pet‑friendly units:",
+      "Pet-friendly units:",
+      "I don’t currently see any pet‑friendly units",
+      "I don't currently see any pet‑friendly units",
+      "Units with (pet‑friendly):",
+      "Units with (pet-friendly):"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-5",
+    "sessionId": "golden-deep-inventory",
+    "message": "How about next weekend instead?",
+    "expectOneOfIncludes": [
+      "Next available weekend is",
+      "available weekend",
+      "Book now:",
+      "I couldn’t find an available weekend",
+      "I couldn't find an available weekend",
+      "I didn’t find any available",
+      "I didn't find any available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-6",
+    "sessionId": "golden-deep-inventory",
+    "message": "And Treehouse 3 for that weekend?",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "Book now:",
+      "already booked",
+      "available"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-7",
+    "sessionId": "golden-deep-inventory",
+    "message": "what time is check in?",
+    "expectOneOfIncludes": [
+      "Check-in",
+      "Check‑in",
+      "Which unit are you asking about?"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-inventory-chain-8",
+    "sessionId": "golden-deep-inventory",
+    "message": "what about checkout?",
+    "expectOneOfIncludes": [
+      "Check-out",
+      "Check‑out",
+      "Which unit are you asking about?"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-1",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Is treehouse available this weekend?",
+    "expectIncludes": [
+      "Which unit are you asking about?",
+      "Possible matches"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-2",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Treehouse 3",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "Book now:",
+      "available",
+      "already booked"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-3",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "What about that unit in March?",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "March",
+      "Available weekends in March",
+      "couldn’t find an available weekend in March",
+      "couldn't find an available weekend in March"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-4",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Is it close to Water Lily Cabin?",
+    "expectOneOfIncludes": [
+      "miles apart",
+      "same location",
+      "different locations"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-5",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Does it have a jacuzzi?",
+    "expectOneOfIncludes": [
+      "Treehouse #3",
+      "jacuzzi",
+      "hot tub",
+      "does not have"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-6",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Can I bring my dog?",
+    "expectOneOfIncludes": [
+      "pets",
+      "pet-friendly",
+      "not pet-friendly",
+      "Pet policies can vary"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-7",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "What are your smoking and party rules?",
+    "expectOneOfIncludes": [
+      "smoking",
+      "parties",
+      "not allowed",
+      "aren’t allowed"
+    ],
+    "expectRegex": []
+  },
+  {
+    "name": "deep-ambiguity-chain-8",
+    "sessionId": "golden-deep-ambiguity",
+    "message": "Book it",
+    "expectOneOfIncludes": [
+      "Book now:",
+      "booking link"
+    ],
     "expectRegex": []
   }
 ]
