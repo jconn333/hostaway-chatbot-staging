@@ -7,7 +7,14 @@ import {
 async function ensureHostawayContext(ctx) {
   if (!ctx.__runtime) ctx.__runtime = {};
   if (!ctx.__runtime.accessToken) {
-    ctx.__runtime.accessToken = await ctx.getHostawayAccessToken();
+    const tokenData = await ctx.getHostawayAccessToken();
+    ctx.__runtime.accessToken =
+      typeof tokenData === "string"
+        ? tokenData
+        : tokenData?.access_token || tokenData?.token || null;
+    if (!ctx.__runtime.accessToken) {
+      throw new Error("Hostaway token missing access_token");
+    }
   }
   if (!ctx.__runtime.listings) {
     ctx.__runtime.listings = await ctx.getListingsCached(ctx.__runtime.accessToken);
@@ -367,7 +374,8 @@ export function createToolRegistry() {
   const tools = [
     {
       name: "resolve_listing",
-      description: "Resolve a listing id from a unit name or query. Use this first when unit is unclear.",
+      description:
+        "Resolve a listing id from a specific unit name or id the user already mentioned. Do not use for broad discovery requests.",
       schema: {
         type: "object",
         additionalProperties: false,
@@ -415,7 +423,8 @@ export function createToolRegistry() {
     },
     {
       name: "list_units",
-      description: "List units filtered by amenities, capacity, pet policy, type, and optional availability range.",
+      description:
+        "List units filtered by amenities, capacity, pet policy, type, and optional availability range. Use for broad discovery and availability without a specific listing id.",
       schema: {
         type: "object",
         additionalProperties: false,

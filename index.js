@@ -208,6 +208,8 @@ const modelFirstOrchestrator = createModelFirstOrchestrator({
     findListingIdFromMessage,
     findListingIdFromMessageStrong,
     suggestUnits,
+    extractDates,
+    getTodayIso,
     helpers: {
       findListingIdFromMessage,
       findListingIdFromMessageStrong,
@@ -708,6 +710,24 @@ function isBookingActionRequest(message) {
     msg.includes("reservation");
   const planningOnly = isBookingStepsRequest(msg);
   return bookingVerb && !planningOnly;
+}
+
+function isConversationalClosureTurn(message) {
+  const msg = normalizeUserMessage(message);
+  if (!msg) return false;
+  return (
+    /^(thanks|thank you|great|awesome|perfect|sounds good|okay|ok|got it|nice)[!. ]*$/.test(msg) ||
+    /\b(thanks|thank you|appreciate it|that helps)\b/.test(msg) ||
+    /\b(we will stay home|i'll come back later|we'll come back later|bye|goodbye|talk later)\b/.test(msg)
+  );
+}
+
+function conversationalClosureReply(message) {
+  const msg = normalizeUserMessage(message);
+  if (/\b(we will stay home|i'll come back later|we'll come back later|bye|goodbye|talk later)\b/.test(msg)) {
+    return "No problem. If plans change, send dates or a unit name and I can help right away.";
+  }
+  return "You’re welcome. If you want, I can check dates, compare units, or answer policy questions.";
 }
 
 function isInventoryQuery(message) {
@@ -3209,6 +3229,12 @@ app.post("/chat", async (req, res) => {
 
     // If we still don't have a listing, ask + suggestions
     if (!listingId) {
+      if (isConversationalClosureTurn(userMessage)) {
+        return sendReply(conversationalClosureReply(userMessage), {
+          route: "general",
+          replyType: "summary",
+        });
+      }
       const shouldStayInventoryWide =
         inventoryCapacityIntent ||
         recommendationIntent ||

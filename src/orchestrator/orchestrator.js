@@ -80,6 +80,82 @@ function inferReplyTypeFromRoute(route = "general") {
   return "general";
 }
 
+function normalizeMessage(message) {
+  return String(message || "").trim().toLowerCase();
+}
+
+function hasBookingSignal(message) {
+  const msg = normalizeMessage(message);
+  if (!msg) return false;
+  return (
+    /\b(availability|available|book|booking|reserve|reservation|check[- ]?in|check[- ]?out|checkout|checkin)\b/.test(
+      msg
+    ) ||
+    /\b(unit|listing|property|cabin|suite|lodge|treehouse|cottage)\b/.test(msg) ||
+    /\b(hot tub|jacuzzi|pool|fireplace|sauna|amenit|pet|pets|smoking|party|noise|cancel|refund)\b/.test(
+      msg
+    ) ||
+    /\b(sleeps?|occupancy|capacity|bedroom|bathroom|beds?)\b/.test(msg) ||
+    /\b(today|tonight|tomorrow|weekend|week|month|january|february|march|april|may|june|july|august|september|october|november|december)\b/.test(
+      msg
+    ) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(msg)
+  );
+}
+
+function isSmallTalkTurn(message) {
+  const msg = normalizeMessage(message);
+  if (!msg) return true;
+  if (hasBookingSignal(msg)) return false;
+  return (
+    /^(hi|hello|hey|yo|good morning|good afternoon|good evening)[!. ]*$/.test(msg) ||
+    /^(thanks|thank you|great|awesome|perfect|sounds good|okay|ok|got it|nice)[!. ]*$/.test(msg) ||
+    /\b(thanks|thank you|appreciate it|that helps)\b/.test(msg) ||
+    /\b(we will stay home|i'll come back later|we'll come back later|bye|goodbye|talk later)\b/.test(msg)
+  );
+}
+
+function smallTalkFallbackReply(message) {
+  const msg = normalizeMessage(message);
+  if (/^(hi|hello|hey|yo|good morning|good afternoon|good evening)[!. ]*$/.test(msg)) {
+    return "Hi! I can help with availability, amenities, and policies for Amish Country Lodging. What would you like to check?";
+  }
+  if (/\b(we will stay home|i'll come back later|we'll come back later|bye|goodbye|talk later)\b/.test(msg)) {
+    return "No problem. If plans change, send dates or a unit name and I can help right away.";
+  }
+  return "You’re welcome. If you want, I can check dates, compare units, or answer policy questions.";
+}
+
+function maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps) {
+  if (toolName !== "check_listing_availability") return parsed;
+  if (typeof deps?.extractDates !== "function") return parsed;
+  const extracted = deps.extractDates(message);
+  if (!extracted?.start || !extracted?.end) return parsed;
+  return {
+    ...parsed,
+    start_date: extracted.start,
+    end_date: extracted.end,
+  };
+}
+
+function validateAvailabilityDateBounds(toolName, parsed, deps) {
+  if (toolName !== "check_listing_availability") return [];
+  const todayIso =
+    typeof deps?.getTodayIso === "function"
+      ? String(deps.getTodayIso() || "")
+      : new Date().toISOString().slice(0, 10);
+  const errors = [];
+  const start = String(parsed?.start_date || "");
+  const end = String(parsed?.end_date || "");
+  if (start && start < todayIso) {
+    errors.push(`args.start_date must be today or later (${todayIso})`);
+  }
+  if (start && end && end <= start) {
+    errors.push("args.end_date must be after args.start_date");
+  }
+  return errors;
+}
+
 export function createModelFirstOrchestrator({
   client,
   model,
@@ -159,13 +235,26 @@ export function createModelFirstOrchestrator({
       nowIso: new Date().toISOString(),
     });
 
-    let response = await client.responses.create({
+    const chatOnlyMode = isSmallTalkTurn(message);
+    let instructions = `${ORCHESTRATOR_SYSTEM_PROMPT}\n\nSession context:\n${contextText}`;
+    if (chatOnlyMode) {
+      instructions +=
+        "\n\nThis is conversational small talk or a closure turn. " +
+        "Respond naturally in 1-2 sentences. " +
+        "Do not ask the user to pick a unit unless they request unit-specific facts.";
+    }
+
+    const initialRequest = {
       model,
-      instructions: `${ORCHESTRATOR_SYSTEM_PROMPT}\n\nSession context:\n${contextText}`,
+      instructions,
       input: [{ role: "user", content: message }],
-      tools: registry.openaiTools,
-      tool_choice: "auto",
-    });
+    };
+    if (!chatOnlyMode) {
+      initialRequest.tools = registry.openaiTools;
+      initialRequest.tool_choice = "auto";
+    }
+
+    let response = await client.responses.create(initialRequest);
 
     let executionFailures = 0;
     const toolNamesUsed = [];
@@ -174,8 +263,14 @@ export function createModelFirstOrchestrator({
     while (true) {
       const functionCalls = extractFunctionCalls(response);
       if (!functionCalls.length) {
-        const reply = extractText(response) || "I’m not sure yet. Could you rephrase that request?";
+        let reply = extractText(response) || "I’m not sure yet. Could you rephrase that request?";
+        if (chatOnlyMode && /^which unit are you asking about\?/i.test(reply)) {
+          reply = smallTalkFallbackReply(message);
+        }
         trace.route = getRouteFromTools(toolNamesUsed);
+        if (chatOnlyMode && trace.route === "general") {
+          trace.modelDecisions.push({ chatOnlyMode: true });
+        }
         logger("orchestrator_turn_complete", {
           sessionId,
           route: trace.route,
@@ -243,7 +338,7 @@ export function createModelFirstOrchestrator({
           continue;
         }
 
-        const parsed = parseToolArgs(call.arguments);
+        let parsed = parseToolArgs(call.arguments);
         if (parsed.__invalid) {
           trace.validation.push({ tool: toolName, ok: false, reason: parsed.__invalid });
           trace.clarificationAsked = true;
@@ -256,7 +351,14 @@ export function createModelFirstOrchestrator({
           };
         }
 
+        parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps);
+
         const validation = validateArgs(tool.schema, parsed);
+        const boundErrors = validateAvailabilityDateBounds(toolName, parsed, deps);
+        if (boundErrors.length) {
+          validation.ok = false;
+          validation.errors = [...(validation.errors || []), ...boundErrors];
+        }
         trace.validation.push({ tool: toolName, ok: validation.ok, errors: validation.errors || [] });
         logger("orchestrator_tool_validation", {
           sessionId,

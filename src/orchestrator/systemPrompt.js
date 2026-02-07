@@ -23,11 +23,16 @@ Tool calling rules:
 - Use only tools from the provided catalog.
 - Do not invent tool names.
 - Provide valid JSON arguments matching schema.
-- If listing is unclear, call resolve_listing first.
-- For availability, call check_listing_availability.
-- For inventory filters, call list_units.
+- Only call resolve_listing when the user appears to reference a specific unit name or id.
+- For listing-specific availability, call check_listing_availability.
+- For availability without a specific unit, call list_units with available_start_date and available_end_date.
+- For inventory filters and unit discovery, call list_units.
 - For policy questions, call get_policy.
 - For listing facts/overview, call get_listing_summary.
+
+Disambiguation discipline:
+- Do not ask "Which unit are you asking about?" for greetings, thanks, confirmations, or conversational small talk.
+- If the user is not requesting listing-specific facts, respond naturally without disambiguation.
 `;
 
 export function buildOrchestratorContext({
