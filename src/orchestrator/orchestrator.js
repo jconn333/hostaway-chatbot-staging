@@ -22,10 +22,15 @@ function messageText(msg) {
   return "";
 }
 
-function buildClarificationQuestion(toolName, errors) {
+function buildClarificationQuestion(toolName, errors, options = {}) {
   const msg = String(errors?.[0] || "").toLowerCase();
   if (toolName === "check_availability") {
-    if (msg.includes("listingid")) return "Which unit should I check availability for?";
+    if (msg.includes("listingid")) {
+      if (options?.unresolvedListingName) {
+        return `I found ${options.unresolvedListingName}, but I need to confirm its ID to check the calendar. One moment...`;
+      }
+      return "Which unit should I check availability for?";
+    }
     if (msg.includes("startdate") || msg.includes("enddate")) {
       return "What dates should I check? Please share start and end dates (YYYY-MM-DD).";
     }
@@ -87,6 +92,28 @@ function isSmallTalkTurn(message) {
   );
 }
 
+function shouldForceAvailabilityToolCall(message, { session = null, listingIdHint = null } = {}) {
+  const msg = normalizeMessage(message);
+  if (!msg) return false;
+
+  const asksAvailability = /\b(available|availability|open|booked|is .* available)\b/.test(msg);
+  if (!asksAvailability) return false;
+
+  const hasDateSignal =
+    /\b(today|tonight|tomorrow|this weekend|next weekend|next friday|next saturday|next sunday|weekend|week|month)\b/.test(
+      msg
+    ) || /\b\d{4}-\d{2}-\d{2}\b/.test(msg);
+  if (!hasDateSignal && !(session?.dates?.start && session?.dates?.end)) return false;
+
+  const hasListingSignal =
+    Boolean(listingIdHint) ||
+    Boolean(session?.listingId) ||
+    /\b(red fern|water lily|joy lodge|grace lodge|hope lodge|treehouse|cabin|suite|lodge|listing|unit|property)\b/.test(
+      msg
+    );
+  return hasListingSignal;
+}
+
 function smallTalkFallbackReply(message) {
   const msg = normalizeMessage(message);
   if (/^(hi|hello|hey|yo|good morning|good afternoon|good evening)[!. ]*$/.test(msg)) {
@@ -98,15 +125,147 @@ function smallTalkFallbackReply(message) {
   return "You’re welcome. If you want, I can check dates, compare units, or answer policy questions.";
 }
 
-function maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps) {
+function maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps, session = null) {
   if (toolName !== "check_availability") return parsed;
-  if (typeof deps?.extractDates !== "function") return parsed;
-  const extracted = deps.extractDates(message);
-  if (!extracted?.start || !extracted?.end) return parsed;
+  const next = { ...(parsed || {}) };
+  if (typeof deps?.extractDates === "function") {
+    const extracted = deps.extractDates(message);
+    if (extracted?.start && extracted?.end) {
+      next.startDate = extracted.start;
+      next.endDate = extracted.end;
+      return next;
+    }
+  }
+  if (!next.startDate && !next.endDate && session?.dates?.start && session?.dates?.end) {
+    next.startDate = String(session.dates.start);
+    next.endDate = String(session.dates.end);
+  }
+  return next;
+}
+
+function normalizeToolArgs(toolName, parsed, schema) {
+  const src = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...parsed } : parsed;
+  if (!src || typeof src !== "object" || Array.isArray(src)) return src;
+
+  const aliasMapByTool = {
+    check_availability: {
+      listing_id: "listingId",
+      start_date: "startDate",
+      end_date: "endDate",
+    },
+    search_listings: {
+      amenity_keys: "amenityKeys",
+      unit_type: "unitType",
+      min_sleeps: "sleeps",
+      pet_friendly: "wantsPetFriendly",
+      petFriendly: "wantsPetFriendly",
+      guestCount: "sleeps",
+      guest_count: "sleeps",
+    },
+    get_unit_details: {
+      listing_id: "listingId",
+    },
+  };
+
+  const aliases = aliasMapByTool[toolName] || {};
+  for (const [from, to] of Object.entries(aliases)) {
+    if (src[from] != null && src[to] == null) src[to] = src[from];
+  }
+
+  if (toolName === "search_listings") {
+    if (typeof src.amenity === "string" && !Array.isArray(src.amenityKeys)) src.amenityKeys = [src.amenity];
+    if (typeof src.amenityKeys === "string") src.amenityKeys = [src.amenityKeys];
+  }
+
+  if (toolName === "get_unit_details" && typeof src.topic === "string") {
+    const t = src.topic.toLowerCase().trim();
+    if (["amenities", "location", "bedding", "summary", "policy"].includes(t)) {
+      src.topic = t;
+    } else if (
+      ["pets", "smoking", "parties", "noise", "checkin", "checkout", "cancellation"].includes(t)
+    ) {
+      src.topic = "policy";
+    }
+  }
+
+  if (schema?.additionalProperties === false && schema?.properties) {
+    for (const key of Object.keys(src)) {
+      if (!(key in schema.properties)) delete src[key];
+    }
+  }
+
+  return src;
+}
+
+function extractUnitNameFromMessage(message) {
+  const msg = String(message || "").trim();
+  if (!msg) return null;
+  const known = msg.match(
+    /\b(red fern cabin|water lily cabin|joy lodge suite|grace lodge|hope lodge|treehouse\s*#?\s*\d+|cabin\s*#?\s*\d+|suite\s*#?\s*\d+|lodge\s*#?\s*\d+)\b/i
+  );
+  if (known?.[1]) return known[1];
+  return null;
+}
+
+function requiresListingId(toolName) {
+  return toolName === "check_availability" || toolName === "get_unit_details";
+}
+
+async function resolveListingIdFromMessage(message, ctx) {
+  const finder =
+    ctx?.findListingIdFromMessageStrong ||
+    ctx?.helpers?.findListingIdFromMessageStrong ||
+    ctx?.findListingIdFromMessage ||
+    ctx?.helpers?.findListingIdFromMessage;
+  if (typeof finder !== "function") return { listingId: null, listingName: null };
+
+  if (!ctx.__runtime) ctx.__runtime = {};
+  if (!ctx.__runtime.accessToken && typeof ctx.getHostawayAccessToken === "function") {
+    const tokenData = await ctx.getHostawayAccessToken();
+    ctx.__runtime.accessToken =
+      typeof tokenData === "string"
+        ? tokenData
+        : tokenData?.access_token || tokenData?.token || null;
+  }
+  if (!ctx.__runtime.listings && typeof ctx.getListingsCached === "function" && ctx.__runtime.accessToken) {
+    ctx.__runtime.listings = await ctx.getListingsCached(ctx.__runtime.accessToken);
+  }
+
+  const listings = Array.isArray(ctx.__runtime.listings) ? ctx.__runtime.listings : [];
+  const resolvedId = finder(String(message || ""), listings);
+  if (!resolvedId) return { listingId: null, listingName: null };
+  const hit = listings.find((l) => String(l.id) === String(resolvedId));
   return {
-    ...parsed,
-    startDate: extracted.start,
-    endDate: extracted.end,
+    listingId: String(resolvedId),
+    listingName: hit?.name || hit?.internalListingName || null,
+  };
+}
+
+async function maybeInjectListingId({
+  toolName,
+  parsed,
+  message,
+  session,
+  listingIdHint,
+  toolContext,
+}) {
+  const next = { ...(parsed || {}) };
+  if (!requiresListingId(toolName)) return { parsed: next, unresolvedListingName: null };
+
+  if (next.listingId == null && next.listing_id != null) next.listingId = String(next.listing_id);
+  if (next.listingId == null && session?.listingId) next.listingId = String(session.listingId);
+  if (next.listingId == null && listingIdHint) next.listingId = String(listingIdHint);
+  if (next.listingId != null) return { parsed: next, unresolvedListingName: null };
+
+  const resolved = await resolveListingIdFromMessage(message, toolContext);
+  if (resolved?.listingId) {
+    next.listingId = String(resolved.listingId);
+    return { parsed: next, unresolvedListingName: null };
+  }
+
+  return {
+    parsed: next,
+    unresolvedListingName: extractUnitNameFromMessage(message),
   };
 }
 
@@ -224,6 +383,7 @@ export function createModelFirstOrchestrator({
     const sessionPatch = {};
     const toolNamesUsed = [];
     let executionFailures = 0;
+    let forcedAvailabilityRetryUsed = false;
 
     while (true) {
       const completion = await client.chat.completions.create({
@@ -235,6 +395,22 @@ export function createModelFirstOrchestrator({
       const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
 
       if (!toolCalls.length) {
+        if (
+          !chatOnlyMode &&
+          !forcedAvailabilityRetryUsed &&
+          shouldForceAvailabilityToolCall(message, { session, listingIdHint })
+        ) {
+          forcedAvailabilityRetryUsed = true;
+          messages.push({ role: "assistant", content: messageText(assistant) || "" });
+          messages.push({
+            role: "system",
+            content:
+              "The user asked a listing-specific availability question. " +
+              "Do not answer yet. Call check_availability with exact listingId, startDate, and endDate first.",
+          });
+          continue;
+        }
+
         let reply = messageText(assistant) || "I’m not sure yet. Could you rephrase that request?";
         if (chatOnlyMode && /^which unit are you asking about\?/i.test(reply)) {
           reply = smallTalkFallbackReply(message);
@@ -327,7 +503,18 @@ export function createModelFirstOrchestrator({
           };
         }
 
-        parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps);
+        parsed = normalizeToolArgs(toolName, parsed, tool.schema);
+        const listingResolution = await maybeInjectListingId({
+          toolName,
+          parsed,
+          message,
+          session,
+          listingIdHint,
+          toolContext,
+        });
+        parsed = listingResolution.parsed;
+        parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps, session);
+        parsed = normalizeToolArgs(toolName, parsed, tool.schema);
         const validation = validateArgs(tool.schema, parsed);
         const boundErrors = validateAvailabilityDateBounds(toolName, parsed, deps);
         if (boundErrors.length) {
@@ -345,12 +532,24 @@ export function createModelFirstOrchestrator({
         if (!validation.ok) {
           trace.clarificationAsked = true;
           return {
-            reply: buildClarificationQuestion(toolName, validation.errors),
+            reply: buildClarificationQuestion(toolName, validation.errors, {
+              unresolvedListingName: listingResolution.unresolvedListingName,
+            }),
             route: "clarification",
             replyType: "summary",
             trace,
             sessionPatch,
           };
+        }
+
+        if (toolName === "check_availability" && typeof parsed?.listingId === "string") {
+          sessionPatch.listingId = String(parsed.listingId);
+          if (typeof parsed?.startDate === "string" && typeof parsed?.endDate === "string") {
+            sessionPatch.dates = { start: parsed.startDate, end: parsed.endDate };
+          }
+        }
+        if (toolName === "get_unit_details" && typeof parsed?.listingId === "string") {
+          sessionPatch.listingId = String(parsed.listingId);
         }
 
         const executed = await executeToolWithRetry(tool, parsed, toolContext, trace);

@@ -227,6 +227,7 @@ test("orchestrator overrides disambiguation reply during chat-only mode", async 
 test("orchestrator normalizes availability dates from relative user message", async () => {
   const seen = { start: null, end: null };
   const client = makeClient([
+    completionWithText("Let me think."),
     completionWithToolCall("check_availability", {
       listingId: "214151",
       startDate: "2023-01-01",
@@ -324,4 +325,170 @@ test("orchestrator context always includes today_iso from deps.getTodayIso", asy
 
   assert.equal(client.calls.length, 1);
   assert.match(String(client.calls[0].messages?.[0]?.content || ""), /\"today_iso\": \"2026-02-06\"/);
+});
+
+test("orchestrator strips unsupported search_listings args before validation", async () => {
+  const client = makeClient([
+    completionWithToolCall("search_listings", {
+      unit_type: "treehouse",
+      maxItems: 5,
+      petFriendly: true,
+    }),
+    completionWithText("done"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps(),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "show treehouses",
+    sessionId: "t-strip-unsupported",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(out.route, "amenity_inventory");
+  assert.equal(out.trace.validation.length > 0, true);
+  assert.equal(out.trace.validation[0].ok, true);
+  assert.equal(out.reply, "done");
+});
+
+test("orchestrator uses session dates when availability call has no dates in args", async () => {
+  const seen = { start: null, end: null };
+  const client = makeClient([
+    completionWithToolCall("check_availability", { listingId: "214151" }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      fetchCalendarRange: async (_id, start, end) => {
+        seen.start = start;
+        seen.end = end;
+        return [];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "what about next friday?",
+    sessionId: "t-session-dates",
+    session: { listingId: "214151", dates: { start: "2026-02-20", end: "2026-02-22" } },
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(seen.start, "2026-02-20");
+  assert.equal(seen.end, "2026-02-22");
+});
+
+test("orchestrator injects listing id from session for availability calls missing id", async () => {
+  const seen = { listingId: null };
+  const client = makeClient([
+    completionWithToolCall("check_availability", {
+      startDate: "2026-02-13",
+      endDate: "2026-02-15",
+    }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      fetchCalendarRange: async (listingId) => {
+        seen.listingId = String(listingId);
+        return [];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "next friday works",
+    sessionId: "t-session-listing",
+    session: { listingId: "214151" },
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(seen.listingId, "214151");
+});
+
+test("orchestrator can resolve listing id from message text before validation", async () => {
+  const seen = { listingId: null };
+  const client = makeClient([
+    completionWithText("I can check that."),
+    completionWithToolCall("check_availability", {
+      startDate: "2026-02-13",
+      endDate: "2026-02-15",
+    }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      getListingsCached: async () => [{ id: 214151, name: "Red Fern Cabin" }],
+      findListingIdFromMessageStrong: () => "214151",
+      fetchCalendarRange: async (listingId) => {
+        seen.listingId = String(listingId);
+        return [];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Is Red Fern Cabin available next weekend?",
+    sessionId: "t-presearch-resolve-id",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(seen.listingId, "214151");
+});
+
+test("orchestrator retries once and forces tool call for listing availability prompts", async () => {
+  const seen = { listingId: null, startDate: null, endDate: null };
+  const client = makeClient([
+    completionWithText("I can help with that."),
+    completionWithToolCall("check_availability", {
+      listingId: "214151",
+      startDate: "2026-02-13",
+      endDate: "2026-02-15",
+    }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      fetchCalendarRange: async (listingId, startDate, endDate) => {
+        seen.listingId = String(listingId);
+        seen.startDate = String(startDate);
+        seen.endDate = String(endDate);
+        return [];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Is Red Fern Cabin available for next weekend?",
+    sessionId: "t-force-availability-tool",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(out.trace.toolCallCount, 1);
+  assert.equal(seen.listingId, "214151");
+  assert.equal(seen.startDate, "2026-02-13");
+  assert.equal(seen.endDate, "2026-02-15");
 });
