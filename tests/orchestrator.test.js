@@ -2,60 +2,56 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createModelFirstOrchestrator } from "../src/orchestrator/orchestrator.js";
 
-function makeClient(responsesQueue) {
-  const queue = Array.isArray(responsesQueue) ? [...responsesQueue] : [];
-  return {
-    calls: [],
-    responses: {
-      async create() {
-        if (!queue.length) throw new Error("No queued mock response");
-        return queue.shift();
-      },
-    },
-  };
-}
-
-function makeRecordingClient(responsesQueue) {
-  const queue = Array.isArray(responsesQueue) ? [...responsesQueue] : [];
+function makeClient(completionsQueue) {
+  const queue = Array.isArray(completionsQueue) ? [...completionsQueue] : [];
   const calls = [];
   return {
     calls,
-    responses: {
-      async create(payload) {
-        calls.push(payload);
-        if (!queue.length) throw new Error("No queued mock response");
-        return queue.shift();
+    chat: {
+      completions: {
+        async create(payload) {
+          calls.push(payload);
+          if (!queue.length) throw new Error("No queued mock completion");
+          return queue.shift();
+        },
       },
     },
   };
 }
 
-function toolCallResponse(name, args = {}, callId = "call_1") {
+function completionWithToolCall(name, args = {}, callId = "call_1") {
   return {
-    id: `resp_${Math.random().toString(36).slice(2, 8)}`,
-    output: [
+    choices: [
       {
-        type: "function_call",
-        id: callId,
-        call_id: callId,
-        name,
-        arguments: JSON.stringify(args),
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: callId,
+              type: "function",
+              function: {
+                name,
+                arguments: JSON.stringify(args),
+              },
+            },
+          ],
+        },
       },
     ],
-    output_text: "",
   };
 }
 
-function finalMessageResponse(text) {
+function completionWithText(text) {
   return {
-    id: `resp_${Math.random().toString(36).slice(2, 8)}`,
-    output: [
+    choices: [
       {
-        type: "message",
-        content: [{ type: "output_text", text }],
+        message: {
+          role: "assistant",
+          content: text,
+        },
       },
     ],
-    output_text: text,
   };
 }
 
@@ -64,6 +60,13 @@ function makeDeps(overrides = {}) {
     getHostawayAccessToken: async () => "token",
     getListingsCached: async () => [{ id: 214151, name: "Treehouse #3" }],
     fetchListingByIdCached: async () => ({ id: 214151, name: "Treehouse #3", listingAmenities: [] }),
+    fetchSafeListingFacts: async () => ({
+      id: 214151,
+      name: "Treehouse #3",
+      bookingUrl: "https://book.amishcountrylodging.com/listings/214151",
+      amenities: [],
+      highlights: [],
+    }),
     fetchCalendarRange: async () => [],
     toSafeListingFacts: (l) => ({
       id: l.id,
@@ -71,24 +74,14 @@ function makeDeps(overrides = {}) {
       bookingUrl: `https://book.amishcountrylodging.com/listings/${l.id}`,
       amenities: [],
     }),
-    findListingIdFromMessage: () => null,
-    findListingIdFromMessageStrong: () => null,
-    suggestUnits: () => [],
     extractDates: () => null,
     getTodayIso: () => "2026-02-06",
-    helpers: {
-      findListingIdFromMessage: () => null,
-      findListingIdFromMessageStrong: () => null,
-      suggestUnits: () => [],
-    },
     ...overrides,
   };
 }
 
 test("orchestrator asks clarification on invalid args", async () => {
-  const client = makeClient([
-    toolCallResponse("check_listing_availability", { listing_id: "214151" }),
-  ]);
+  const client = makeClient([completionWithToolCall("check_availability", { listingId: "214151" })]);
 
   const orchestrator = createModelFirstOrchestrator({
     client,
@@ -112,8 +105,8 @@ test("orchestrator asks clarification on invalid args", async () => {
 
 test("orchestrator blocks disallowed role from tool execution", async () => {
   const client = makeClient([
-    toolCallResponse("list_units", { limit: 5 }),
-    finalMessageResponse("Role blocked handled."),
+    completionWithToolCall("search_listings", {}),
+    completionWithText("Role blocked handled."),
   ]);
 
   const orchestrator = createModelFirstOrchestrator({
@@ -137,8 +130,8 @@ test("orchestrator blocks disallowed role from tool execution", async () => {
 
 test("orchestrator tracks hallucinated tools", async () => {
   const client = makeClient([
-    toolCallResponse("made_up_tool", { foo: "bar" }),
-    finalMessageResponse("Unknown tool handled."),
+    completionWithToolCall("made_up_tool", { foo: "bar" }),
+    completionWithText("Unknown tool handled."),
   ]);
 
   const orchestrator = createModelFirstOrchestrator({
@@ -166,7 +159,7 @@ test("orchestrator opens circuit breaker on repeated execution failure", async (
   });
 
   const client = makeClient([
-    toolCallResponse("resolve_listing", { listing_query: "treehouse 3" }),
+    completionWithToolCall("search_listings", { unitType: "treehouse" }),
   ]);
 
   const orchestrator = createModelFirstOrchestrator({
@@ -177,7 +170,7 @@ test("orchestrator opens circuit breaker on repeated execution failure", async (
   });
 
   const out = await orchestrator.runTurn({
-    message: "treehouse 3",
+    message: "show me treehouses",
     sessionId: "t-circuit-breaker",
     session: {},
     role: "guest",
@@ -189,7 +182,7 @@ test("orchestrator opens circuit breaker on repeated execution failure", async (
 });
 
 test("orchestrator uses chat-only mode for small-talk turns", async () => {
-  const client = makeRecordingClient([finalMessageResponse("Happy to help anytime.")]);
+  const client = makeClient([completionWithText("Happy to help anytime.")]);
 
   const orchestrator = createModelFirstOrchestrator({
     client,
@@ -211,9 +204,7 @@ test("orchestrator uses chat-only mode for small-talk turns", async () => {
 });
 
 test("orchestrator overrides disambiguation reply during chat-only mode", async () => {
-  const client = makeRecordingClient([
-    finalMessageResponse("Which unit are you asking about?"),
-  ]);
+  const client = makeClient([completionWithText("Which unit are you asking about?")]);
 
   const orchestrator = createModelFirstOrchestrator({
     client,
@@ -235,13 +226,13 @@ test("orchestrator overrides disambiguation reply during chat-only mode", async 
 
 test("orchestrator normalizes availability dates from relative user message", async () => {
   const seen = { start: null, end: null };
-  const client = makeRecordingClient([
-    toolCallResponse("check_listing_availability", {
-      listing_id: "214151",
-      start_date: "2023-01-01",
-      end_date: "2023-01-02",
+  const client = makeClient([
+    completionWithToolCall("check_availability", {
+      listingId: "214151",
+      startDate: "2023-01-01",
+      endDate: "2023-01-02",
     }),
-    finalMessageResponse("Availability checked."),
+    completionWithText("Availability checked."),
   ]);
 
   const orchestrator = createModelFirstOrchestrator({
@@ -277,11 +268,11 @@ test("orchestrator normalizes availability dates from relative user message", as
 });
 
 test("orchestrator blocks past-date availability calls before tool execution", async () => {
-  const client = makeRecordingClient([
-    toolCallResponse("check_listing_availability", {
-      listing_id: "214151",
-      start_date: "2023-01-01",
-      end_date: "2023-01-02",
+  const client = makeClient([
+    completionWithToolCall("check_availability", {
+      listingId: "214151",
+      startDate: "2023-01-01",
+      endDate: "2023-01-02",
     }),
   ]);
 
@@ -310,6 +301,27 @@ test("orchestrator blocks past-date availability calls before tool execution", a
   assert.equal(out.trace.validation[0].ok, false);
   assert.match(
     JSON.stringify(out.trace.validation[0].errors || []),
-    /today or later|end_date must be after args.start_date/i
+    /today or later|endDate must be after args.startDate/i
   );
+});
+
+test("orchestrator context always includes today_iso from deps.getTodayIso", async () => {
+  const client = makeClient([completionWithText("ok")]);
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      getTodayIso: () => "2026-02-06",
+    }),
+  });
+
+  await orchestrator.runTurn({
+    message: "hello",
+    sessionId: "t-today-iso",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(client.calls.length, 1);
+  assert.match(String(client.calls[0].messages?.[0]?.content || ""), /\"today_iso\": \"2026-02-06\"/);
 });

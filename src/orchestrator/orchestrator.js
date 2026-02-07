@@ -2,38 +2,6 @@ import { ORCHESTRATOR_SYSTEM_PROMPT, buildOrchestratorContext } from "./systemPr
 import { createToolRegistry } from "./toolRegistry.js";
 import { parseToolArgs, validateArgs } from "./schema.js";
 
-function extractText(response) {
-  if (!response) return "";
-  if (typeof response.output_text === "string" && response.output_text.trim()) {
-    return response.output_text.trim();
-  }
-  const chunks = [];
-  for (const item of response.output || []) {
-    if (item?.type === "message" && Array.isArray(item.content)) {
-      for (const c of item.content) {
-        if (c?.type === "output_text" && c?.text) chunks.push(c.text);
-        if (c?.type === "text" && c?.text) chunks.push(c.text);
-      }
-    }
-  }
-  return chunks.join("\n").trim();
-}
-
-function extractFunctionCalls(response) {
-  const calls = [];
-  for (const item of response?.output || []) {
-    if (item?.type === "function_call") {
-      calls.push({
-        id: item.id || null,
-        call_id: item.call_id || item.id || null,
-        name: item.name,
-        arguments: item.arguments,
-      });
-    }
-  }
-  return calls;
-}
-
 function withTimeout(promise, ms, label) {
   let timer;
   const timeout = new Promise((_, reject) => {
@@ -42,39 +10,43 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function messageText(msg) {
+  if (!msg) return "";
+  if (typeof msg.content === "string") return msg.content.trim();
+  if (Array.isArray(msg.content)) {
+    return msg.content
+      .map((c) => (typeof c?.text === "string" ? c.text : ""))
+      .join("\n")
+      .trim();
+  }
+  return "";
+}
+
 function buildClarificationQuestion(toolName, errors) {
   const msg = String(errors?.[0] || "").toLowerCase();
-  if (toolName === "check_listing_availability") {
-    if (msg.includes("listing_id")) return "Which unit should I check availability for?";
-    if (msg.includes("start_date") || msg.includes("end_date")) {
+  if (toolName === "check_availability") {
+    if (msg.includes("listingid")) return "Which unit should I check availability for?";
+    if (msg.includes("startdate") || msg.includes("enddate")) {
       return "What dates should I check? Please share start and end dates (YYYY-MM-DD).";
     }
     return "What unit and dates should I check for availability?";
   }
-  if (toolName === "resolve_listing") return "Which unit name should I use?";
-  if (toolName === "get_policy") {
-    if (msg.includes("topic")) {
-      return "Which policy should I check: pets, smoking, parties, noise, check-in/out, or cancellation?";
-    }
-    return "Which unit should I check that policy for?";
+  if (toolName === "get_unit_details") return "Which unit should I use, and what topic should I check?";
+  if (toolName === "search_listings") {
+    return "What filters should I use (guests, amenities, pet-friendly, or unit type)?";
   }
-  if (toolName === "get_listing_summary") return "Which unit would you like details for?";
-  if (toolName === "list_units") return "What filters should I use (dates, guests, amenities, or unit type)?";
   return "Could you clarify what you'd like me to check?";
 }
 
 function getRouteFromTools(toolNames = []) {
-  if (toolNames.includes("check_listing_availability")) return "availability";
-  if (toolNames.includes("list_units")) return "amenity_inventory";
-  if (toolNames.includes("get_policy")) return "policy";
-  if (toolNames.includes("get_listing_summary")) return "summary";
-  if (toolNames.includes("resolve_listing")) return "disambiguation";
+  if (toolNames.includes("check_availability")) return "availability";
+  if (toolNames.includes("search_listings")) return "amenity_inventory";
+  if (toolNames.includes("get_unit_details")) return "summary";
   return "general";
 }
 
 function inferReplyTypeFromRoute(route = "general") {
   if (route === "availability") return "availability";
-  if (route === "policy") return "policy";
   if (route === "amenity_inventory") return "inventory";
   if (route === "summary") return "summary";
   return "general";
@@ -127,33 +99,40 @@ function smallTalkFallbackReply(message) {
 }
 
 function maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps) {
-  if (toolName !== "check_listing_availability") return parsed;
+  if (toolName !== "check_availability") return parsed;
   if (typeof deps?.extractDates !== "function") return parsed;
   const extracted = deps.extractDates(message);
   if (!extracted?.start || !extracted?.end) return parsed;
   return {
     ...parsed,
-    start_date: extracted.start,
-    end_date: extracted.end,
+    startDate: extracted.start,
+    endDate: extracted.end,
   };
 }
 
 function validateAvailabilityDateBounds(toolName, parsed, deps) {
-  if (toolName !== "check_listing_availability") return [];
+  if (toolName !== "check_availability") return [];
   const todayIso =
     typeof deps?.getTodayIso === "function"
       ? String(deps.getTodayIso() || "")
       : new Date().toISOString().slice(0, 10);
   const errors = [];
-  const start = String(parsed?.start_date || "");
-  const end = String(parsed?.end_date || "");
-  if (start && start < todayIso) {
-    errors.push(`args.start_date must be today or later (${todayIso})`);
-  }
-  if (start && end && end <= start) {
-    errors.push("args.end_date must be after args.start_date");
-  }
+  const start = String(parsed?.startDate || "");
+  const end = String(parsed?.endDate || "");
+  if (start && start < todayIso) errors.push(`args.startDate must be today or later (${todayIso})`);
+  if (start && end && end <= start) errors.push("args.endDate must be after args.startDate");
   return errors;
+}
+
+function toChatTools(openaiTools) {
+  return (openaiTools || []).map((t) => ({
+    type: "function",
+    function: {
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    },
+  }));
 }
 
 export function createModelFirstOrchestrator({
@@ -169,6 +148,7 @@ export function createModelFirstOrchestrator({
   if (!deps) throw new Error("createModelFirstOrchestrator requires deps");
 
   const registry = createToolRegistry();
+  const chatTools = toChatTools(registry.openaiTools);
 
   async function executeToolWithRetry(tool, args, ctx, trace) {
     let attempt = 0;
@@ -181,11 +161,7 @@ export function createModelFirstOrchestrator({
           toolTimeoutMs,
           `Tool ${tool.name}`
         );
-        trace.toolExecutions.push({
-          tool: tool.name,
-          attempt,
-          ok: true,
-        });
+        trace.toolExecutions.push({ tool: tool.name, attempt, ok: true });
         return { ok: true, result };
       } catch (err) {
         lastErr = err;
@@ -200,17 +176,10 @@ export function createModelFirstOrchestrator({
     return { ok: false, error: String(lastErr?.message || lastErr || "tool failed") };
   }
 
-  async function runTurn({
-    message,
-    sessionId,
-    session,
-    role = "guest",
-    listingIdHint = null,
-    runtime = {},
-  }) {
+  async function runTurn({ message, sessionId, session, role = "guest", listingIdHint = null, runtime = {} }) {
     const normalizedRole = String(role || "guest").toLowerCase();
     const trace = {
-      model: model,
+      model,
       modelDecisions: [],
       validation: [],
       toolExecutions: [],
@@ -229,48 +198,48 @@ export function createModelFirstOrchestrator({
       listingIdHint: listingIdHint ? String(listingIdHint) : null,
     };
 
+    const todayIso =
+      typeof deps?.getTodayIso === "function"
+        ? String(deps.getTodayIso() || "")
+        : new Date().toISOString().slice(0, 10);
     const contextText = buildOrchestratorContext({
       session,
       userRole: normalizedRole,
       nowIso: new Date().toISOString(),
+      todayIso,
     });
-
     const chatOnlyMode = isSmallTalkTurn(message);
-    let instructions = `${ORCHESTRATOR_SYSTEM_PROMPT}\n\nSession context:\n${contextText}`;
+    let systemPrompt = `${ORCHESTRATOR_SYSTEM_PROMPT}\n\nSession context:\n${contextText}`;
     if (chatOnlyMode) {
-      instructions +=
+      systemPrompt +=
         "\n\nThis is conversational small talk or a closure turn. " +
         "Respond naturally in 1-2 sentences. " +
         "Do not ask the user to pick a unit unless they request unit-specific facts.";
     }
 
-    const initialRequest = {
-      model,
-      instructions,
-      input: [{ role: "user", content: message }],
-    };
-    if (!chatOnlyMode) {
-      initialRequest.tools = registry.openaiTools;
-      initialRequest.tool_choice = "auto";
-    }
-
-    let response = await client.responses.create(initialRequest);
-
-    let executionFailures = 0;
-    const toolNamesUsed = [];
+    const messages = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: String(message || "") },
+    ];
     const sessionPatch = {};
+    const toolNamesUsed = [];
+    let executionFailures = 0;
 
     while (true) {
-      const functionCalls = extractFunctionCalls(response);
-      if (!functionCalls.length) {
-        let reply = extractText(response) || "I’m not sure yet. Could you rephrase that request?";
+      const completion = await client.chat.completions.create({
+        model,
+        messages,
+        ...(chatOnlyMode ? {} : { tools: chatTools, tool_choice: "auto" }),
+      });
+      const assistant = completion?.choices?.[0]?.message || { role: "assistant", content: "" };
+      const toolCalls = Array.isArray(assistant.tool_calls) ? assistant.tool_calls : [];
+
+      if (!toolCalls.length) {
+        let reply = messageText(assistant) || "I’m not sure yet. Could you rephrase that request?";
         if (chatOnlyMode && /^which unit are you asking about\?/i.test(reply)) {
           reply = smallTalkFallbackReply(message);
         }
         trace.route = getRouteFromTools(toolNamesUsed);
-        if (chatOnlyMode && trace.route === "general") {
-          trace.modelDecisions.push({ chatOnlyMode: true });
-        }
         logger("orchestrator_turn_complete", {
           sessionId,
           route: trace.route,
@@ -287,28 +256,39 @@ export function createModelFirstOrchestrator({
       }
 
       trace.modelDecisions.push({
-        callCount: functionCalls.length,
-        tools: functionCalls.map((c) => c.name),
+        callCount: toolCalls.length,
+        tools: toolCalls.map((c) => c?.function?.name || c?.name || ""),
       });
 
-      const toolOutputs = [];
+      messages.push({
+        role: "assistant",
+        content: assistant.content || "",
+        tool_calls: toolCalls.map((c) => ({
+          id: c.id,
+          type: "function",
+          function: {
+            name: c?.function?.name || "",
+            arguments: c?.function?.arguments || "{}",
+          },
+        })),
+      });
 
-      for (const call of functionCalls) {
+      for (const call of toolCalls) {
         trace.toolCallCount += 1;
-        const toolName = String(call?.name || "");
+        const toolName = String(call?.function?.name || "");
+        const callId = String(call?.id || "");
         toolNamesUsed.push(toolName);
 
         logger("orchestrator_tool_selected", {
           sessionId,
           tool: toolName,
-          callId: call.call_id,
+          callId,
         });
 
         if (trace.toolCallCount > maxToolCalls) {
           trace.failureReason = "max_tool_calls_exceeded";
           return {
-            reply:
-              "I need one specific detail to continue. Which unit and dates should I check next?",
+            reply: "I need one specific detail to continue. Which unit and dates should I check next?",
             route: "clarification",
             replyType: "summary",
             trace,
@@ -319,26 +299,22 @@ export function createModelFirstOrchestrator({
         const tool = registry.byName.get(toolName);
         if (!tool) {
           trace.unknownToolCalls += 1;
-          toolOutputs.push({
-            type: "function_call_output",
-            call_id: call.call_id,
-            output: JSON.stringify({ ok: false, error: `Unknown tool: ${toolName}` }),
+          messages.push({
+            role: "tool",
+            tool_call_id: callId,
+            content: JSON.stringify({ ok: false, error: `Unknown tool: ${toolName}` }),
           });
           continue;
         }
 
         if (!tool.roleAllowlist.includes(normalizedRole)) {
-          const msg = `Role ${normalizedRole} is not allowed to call ${toolName}.`;
-          trace.validation.push({ tool: toolName, ok: false, reason: msg });
-          toolOutputs.push({
-            type: "function_call_output",
-            call_id: call.call_id,
-            output: JSON.stringify({ ok: false, error: msg }),
-          });
+          const err = `Role ${normalizedRole} is not allowed to call ${toolName}.`;
+          trace.validation.push({ tool: toolName, ok: false, reason: err });
+          messages.push({ role: "tool", tool_call_id: callId, content: JSON.stringify({ ok: false, error: err }) });
           continue;
         }
 
-        let parsed = parseToolArgs(call.arguments);
+        let parsed = parseToolArgs(call?.function?.arguments || "{}");
         if (parsed.__invalid) {
           trace.validation.push({ tool: toolName, ok: false, reason: parsed.__invalid });
           trace.clarificationAsked = true;
@@ -352,7 +328,6 @@ export function createModelFirstOrchestrator({
         }
 
         parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps);
-
         const validation = validateArgs(tool.schema, parsed);
         const boundErrors = validateAvailabilityDateBounds(toolName, parsed, deps);
         if (boundErrors.length) {
@@ -378,17 +353,6 @@ export function createModelFirstOrchestrator({
           };
         }
 
-        if (tool.irreversible && parsed.confirm !== true) {
-          trace.clarificationAsked = true;
-          return {
-            reply: "Please confirm before I do that. Reply with: confirm.",
-            route: "clarification",
-            replyType: "summary",
-            trace,
-            sessionPatch,
-          };
-        }
-
         const executed = await executeToolWithRetry(tool, parsed, toolContext, trace);
         if (!executed.ok) {
           executionFailures += 1;
@@ -398,16 +362,15 @@ export function createModelFirstOrchestrator({
             ok: false,
             error: executed.error,
           });
-          toolOutputs.push({
-            type: "function_call_output",
-            call_id: call.call_id,
-            output: JSON.stringify({ ok: false, error: executed.error }),
+          messages.push({
+            role: "tool",
+            tool_call_id: callId,
+            content: JSON.stringify({ ok: false, error: executed.error }),
           });
           if (executionFailures >= maxExecutionFailures) {
             trace.failureReason = "circuit_breaker_open";
             return {
-              reply:
-                "I’m having trouble reaching one of my data tools right now. Please try again in a moment.",
+              reply: "I’m having trouble reaching one of my data tools right now. Please try again in a moment.",
               route: "error",
               replyType: "summary",
               trace,
@@ -418,54 +381,31 @@ export function createModelFirstOrchestrator({
         }
 
         const result = executed.result;
-        logger("orchestrator_tool_execution", {
-          sessionId,
-          tool: toolName,
-          ok: true,
-        });
-
-        if (toolName === "resolve_listing" && result?.status === "ok") {
+        logger("orchestrator_tool_execution", { sessionId, tool: toolName, ok: true });
+        if (toolName === "check_availability") {
+          sessionPatch.listingId = String(result.listing_id);
+          sessionPatch.listingName = result.listing_name || null;
+          sessionPatch.dates = { start: result.start_date, end: result.end_date };
+        }
+        if (toolName === "get_unit_details") {
           sessionPatch.listingId = String(result.listing_id);
           sessionPatch.listingName = result.listing_name || null;
         }
-        if (toolName === "check_listing_availability") {
-          sessionPatch.listingId = String(result.listing_id);
-          sessionPatch.listingName = result.listing_name || null;
-          sessionPatch.dates = {
-            start: result.start_date,
-            end: result.end_date,
-          };
-        }
-        if (toolName === "get_listing_summary") {
-          sessionPatch.listingId = String(result.listing_id);
-          sessionPatch.listingName = result.listing_name || null;
-        }
-        if (toolName === "list_units") {
+        if (toolName === "search_listings") {
           sessionPatch.inventoryFilters = result?.filters_applied || null;
           sessionPatch.activeResultSet = {
             listingIds: (result?.units || []).map((u) => String(u.listing_id)),
           };
         }
 
-        toolOutputs.push({
-          type: "function_call_output",
-          call_id: call.call_id,
-          output: JSON.stringify({ ok: true, result }),
+        messages.push({
+          role: "tool",
+          tool_call_id: callId,
+          content: JSON.stringify({ ok: true, result }),
         });
       }
-
-      response = await client.responses.create({
-        model,
-        previous_response_id: response.id,
-        input: toolOutputs,
-        tools: registry.openaiTools,
-        tool_choice: "auto",
-      });
     }
   }
 
-  return {
-    runTurn,
-    registry,
-  };
+  return { runTurn, registry };
 }

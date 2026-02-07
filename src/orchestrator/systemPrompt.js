@@ -23,12 +23,10 @@ Tool calling rules:
 - Use only tools from the provided catalog.
 - Do not invent tool names.
 - Provide valid JSON arguments matching schema.
-- Only call resolve_listing when the user appears to reference a specific unit name or id.
-- For listing-specific availability, call check_listing_availability.
-- For availability without a specific unit, call list_units with available_start_date and available_end_date.
-- For inventory filters and unit discovery, call list_units.
-- For policy questions, call get_policy.
-- For listing facts/overview, call get_listing_summary.
+- Always use today_iso to convert relative dates ("this weekend", "next Friday") into exact YYYY-MM-DD before calling tools.
+- For unit discovery by filters, call search_listings.
+- For listing-specific availability, call check_availability.
+- For policy/fact questions on a listing, call get_unit_details.
 
 Disambiguation discipline:
 - Do not ask "Which unit are you asking about?" for greetings, thanks, confirmations, or conversational small talk.
@@ -39,10 +37,12 @@ export function buildOrchestratorContext({
   session = null,
   userRole = "guest",
   nowIso = null,
+  todayIso = null,
 } = {}) {
   const context = {
     user_role: userRole,
     now_iso: nowIso || new Date().toISOString(),
+    today_iso: todayIso || new Date().toISOString().slice(0, 10),
     session: {
       listing_id: session?.listingId || null,
       listing_name: session?.listingName || null,

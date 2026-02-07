@@ -104,124 +104,26 @@ function policyAnswerFromHouseRules(safe, intent) {
   return null;
 }
 
-function policyAnswerFromFacts(safe, intent) {
-  if (intent === "checkin") {
-    const ci = formatCheckInRange(safe?.checkInStart, safe?.checkInEnd);
-    if (ci) return `Check-in is ${ci}.`;
-  }
-  if (intent === "checkout") {
-    const co = formatTime12(safe?.checkOut);
-    if (co) return `Check-out is ${co}.`;
-  }
-  if (intent === "cancellation" && safe?.cancellationPolicy) {
-    return `Cancellation policy: ${safe.cancellationPolicy}.`;
-  }
-  return null;
-}
-
-async function resolveListingByIdOrQuery(args, ctx) {
-  const runtime = await ensureHostawayContext(ctx);
-  const { listing_query } = args;
-  const query = String(listing_query || "").trim();
-  const listings = runtime.listings || [];
-
-  const exactId = query.match(/^\d+$/) ? query : null;
-  if (exactId) {
-    const byId = listings.find((l) => String(l.id) === exactId);
-    if (byId) {
-      return {
-        status: "ok",
-        listing_id: String(byId.id),
-        listing_name: byId.name || byId.internalListingName || `Listing ${byId.id}`,
-        match_type: "id",
-      };
-    }
-  }
-
-  const strong = ctx.helpers.findListingIdFromMessageStrong(query, listings);
-  if (strong) {
-    const hit = listings.find((l) => String(l.id) === String(strong));
-    return {
-      status: "ok",
-      listing_id: String(strong),
-      listing_name: hit?.name || hit?.internalListingName || `Listing ${strong}`,
-      match_type: "strong_name",
-    };
-  }
-
-  const loose = ctx.helpers.findListingIdFromMessage(query, listings);
-  if (loose) {
-    const hit = listings.find((l) => String(l.id) === String(loose));
-    return {
-      status: "ok",
-      listing_id: String(loose),
-      listing_name: hit?.name || hit?.internalListingName || `Listing ${loose}`,
-      match_type: "fuzzy_name",
-    };
-  }
-
-  const candidates = ctx.helpers.suggestUnits(query, listings, 5);
-  if (Array.isArray(candidates) && candidates.length) {
-    return {
-      status: "ambiguous",
-      candidates: candidates.map((name) => {
-        const hit = listings.find((l) => String(l.name || "") === String(name));
-        return {
-          listing_id: hit ? String(hit.id) : null,
-          listing_name: name,
-        };
-      }),
-    };
-  }
-
-  return {
-    status: "not_found",
-    message: "No matching unit found.",
-  };
-}
-
-async function getListingSummary(args, ctx) {
-  const runtime = await ensureHostawayContext(ctx);
-  const listing = await ctx.fetchListingByIdCached(args.listing_id, runtime.accessToken);
-  const safe = ctx.toSafeListingFacts(listing, { audience: "postbooking" });
-
-  return {
-    listing_id: String(safe.id),
-    listing_name: safe.name,
-    summary: safe.descriptionShort || safe.description || "",
-    sleeps: safe.sleeps,
-    bedrooms: safe.bedrooms,
-    bathrooms: safe.bathrooms,
-    beds: safe.beds,
-    check_in: formatCheckInRange(safe.checkInStart, safe.checkInEnd) || null,
-    check_out: formatTime12(safe.checkOut) || null,
-    min_nights: safe.minNights ?? null,
-    address: safe.address || null,
-    amenities: (safe.amenities || []).slice(0, 25),
-    booking_url: safe.bookingUrl,
-  };
-}
-
 async function checkListingAvailability(args, ctx) {
   const runtime = await ensureHostawayContext(ctx);
-  const listing = await ctx.fetchListingByIdCached(args.listing_id, runtime.accessToken);
+  const listing = await ctx.fetchListingByIdCached(args.listingId, runtime.accessToken);
   const safe = ctx.toSafeListingFacts(listing, { audience: "postbooking" });
   const days = await ctx.fetchCalendarRange(
-    String(args.listing_id),
-    args.start_date,
-    args.end_date,
+    String(args.listingId),
+    args.startDate,
+    args.endDate,
     runtime.accessToken
   );
-  const summary = summarizeAvailabilityWithAlternatives(days, args.start_date, args.end_date);
-  const alternatives = findAlternativeStays(days, Number(args.nights || 2), args.start_date, 3);
+  const summary = summarizeAvailabilityWithAlternatives(days, args.startDate, args.endDate);
+  const alternatives = findAlternativeStays(days, args.startDate, Number(args.nights || 2), 5, 3);
 
   return {
     listing_id: String(safe.id),
     listing_name: safe.name,
-    start_date: args.start_date,
-    end_date: args.end_date,
-    start_display: toDisplayDate(args.start_date),
-    end_display: toDisplayDate(args.end_date),
+    start_date: args.startDate,
+    end_date: args.endDate,
+    start_display: toDisplayDate(args.startDate),
+    end_display: toDisplayDate(args.endDate),
     available: Boolean(summary?.available),
     reason_code: summary?.reasonCode || null,
     blocked_date: summary?.blockedDate || null,
@@ -244,20 +146,16 @@ async function checkListingAvailability(args, ctx) {
   };
 }
 
-async function listUnits(args, ctx) {
+async function searchListings(args, ctx) {
   const runtime = await ensureHostawayContext(ctx);
   const listings = runtime.listings || [];
-  const limit = Math.max(1, Math.min(Number(args.limit || 20), 40));
-  const amenityKeys = Array.isArray(args.amenity_keys)
-    ? args.amenity_keys.map((v) => String(v).toLowerCase())
+  const limit = 40;
+  const amenityKeys = Array.isArray(args.amenityKeys)
+    ? args.amenityKeys.map((v) => String(v).toLowerCase())
     : [];
-  const unitType = args.unit_type ? String(args.unit_type).toLowerCase() : null;
-  const minSleeps = Number.isFinite(args.min_sleeps) ? Number(args.min_sleeps) : null;
-  const minBedrooms = Number.isFinite(args.min_bedrooms) ? Number(args.min_bedrooms) : null;
-  const minBathrooms = Number.isFinite(args.min_bathrooms) ? Number(args.min_bathrooms) : null;
-  const petFriendly = args.pet_friendly === true;
-  const startDate = args.available_start_date || null;
-  const endDate = args.available_end_date || null;
+  const unitType = args.unitType ? String(args.unitType).toLowerCase() : null;
+  const minSleeps = Number.isFinite(args.sleeps) ? Number(args.sleeps) : null;
+  const petFriendly = args.wantsPetFriendly === true;
 
   const safes = await Promise.all(
     listings.map(async (l) => {
@@ -271,30 +169,11 @@ async function listUnits(args, ctx) {
     matches = matches.filter((s) => String(s.name || "").toLowerCase().includes(unitType));
   }
   if (minSleeps != null) matches = matches.filter((s) => Number(s.sleeps || 0) >= minSleeps);
-  if (minBedrooms != null) matches = matches.filter((s) => Number(s.bedrooms || 0) >= minBedrooms);
-  if (minBathrooms != null) matches = matches.filter((s) => Number(s.bathrooms || 0) >= minBathrooms);
   if (amenityKeys.length) {
     matches = matches.filter((s) => amenityKeys.every((k) => hasAmenity(s, k)));
   }
   if (petFriendly) {
     matches = matches.filter((s) => petPolicyFromRules(s) === "allowed");
-  }
-
-  if (startDate && endDate) {
-    const filtered = [];
-    for (const safe of matches) {
-      // Use same per-turn runtime token to keep reads deterministic.
-      const cal = await ctx.fetchCalendarRange(
-        String(safe.id),
-        startDate,
-        endDate,
-        runtime.accessToken
-      );
-      const summary = summarizeAvailabilityWithAlternatives(cal, startDate, endDate);
-      if (summary?.available) filtered.push(safe);
-      if (filtered.length >= limit) break;
-    }
-    matches = filtered;
   }
 
   const final = matches.slice(0, limit).map((s) => ({
@@ -310,62 +189,93 @@ async function listUnits(args, ctx) {
 
   return {
     filters_applied: {
-      unit_type: unitType,
-      min_sleeps: minSleeps,
-      min_bedrooms: minBedrooms,
-      min_bathrooms: minBathrooms,
-      amenity_keys: amenityKeys,
-      pet_friendly: petFriendly,
-      available_start_date: startDate,
-      available_end_date: endDate,
+      unitType: unitType || null,
+      sleeps: minSleeps,
+      amenityKeys,
+      wantsPetFriendly: petFriendly,
     },
     count: final.length,
     units: final,
   };
 }
 
-async function getPolicy(args, ctx) {
+async function getUnitDetails(args, ctx) {
   const runtime = await ensureHostawayContext(ctx);
-  const topic = String(args.topic || "").toLowerCase();
-  const listingId = args.listing_id ? String(args.listing_id) : null;
+  const topic = String(args.topic || "");
+  const listingId = String(args.listingId);
+  const safe =
+    typeof ctx.fetchSafeListingFacts === "function"
+      ? await ctx.fetchSafeListingFacts(listingId, runtime.accessToken, { audience: "postbooking" })
+      : ctx.toSafeListingFacts(
+          await ctx.fetchListingByIdCached(listingId, runtime.accessToken),
+          { audience: "postbooking" }
+        );
 
-  if (topic === "smoking") {
+  if (topic === "amenities") {
     return {
+      listing_id: String(safe.id),
+      listing_name: safe.name,
       topic,
-      scope: "global",
-      answer: "Smoking isn’t allowed at any of our units (non-smoking).",
-    };
-  }
-  if (topic === "parties") {
-    return {
-      topic,
-      scope: "global",
-      answer: "Parties and events aren’t allowed at any of our units.",
-    };
-  }
-
-  if (!listingId) {
-    return {
-      topic,
-      scope: "global",
-      answer:
-        "This policy can vary by unit. Please provide a specific unit name so I can check accurately.",
+      amenities: safe.amenities || [],
+      highlights: safe.highlights || [],
+      booking_url: safe.bookingUrl,
     };
   }
 
-  const listing = await ctx.fetchListingByIdCached(listingId, runtime.accessToken);
-  const safe = ctx.toSafeListingFacts(listing, { audience: "postbooking" });
-  const answer =
-    policyAnswerFromHouseRules(safe, topic) ||
-    policyAnswerFromFacts(safe, topic) ||
-    "I couldn’t find a definitive policy note for that topic in this unit’s data.";
+  if (topic === "location") {
+    return {
+      listing_id: String(safe.id),
+      listing_name: safe.name,
+      topic,
+      address: safe.address || null,
+      city: safe.city || null,
+      state: safe.state || null,
+      location_summary: safe.locationSummary || null,
+      booking_url: safe.bookingUrl,
+    };
+  }
+
+  if (topic === "bedding") {
+    return {
+      listing_id: String(safe.id),
+      listing_name: safe.name,
+      topic,
+      sleeps: safe.sleeps ?? null,
+      bedrooms: safe.bedrooms ?? null,
+      bathrooms: safe.bathrooms ?? null,
+      beds: safe.beds ?? null,
+      booking_url: safe.bookingUrl,
+    };
+  }
+
+  if (topic === "summary") {
+    return {
+      listing_id: String(safe.id),
+      listing_name: safe.name,
+      topic,
+      summary: safe.descriptionShort || safe.description || "",
+      booking_url: safe.bookingUrl,
+    };
+  }
 
   return {
-    topic,
-    scope: "listing",
     listing_id: String(safe.id),
     listing_name: safe.name,
-    answer,
+    topic,
+    check_in: formatCheckInRange(safe.checkInStart, safe.checkInEnd) || null,
+    check_out: formatTime12(safe.checkOut) || null,
+    min_nights: safe.minNights ?? null,
+    cancellation_policy: safe.cancellationPolicy || null,
+    pet_policy:
+      policyAnswerFromHouseRules(safe, "pets") ||
+      "I couldn’t find a definitive pets policy note in this unit’s data.",
+    smoking_policy:
+      policyAnswerFromHouseRules(safe, "smoking") ||
+      "Smoking isn’t allowed at any of our units (non-smoking).",
+    parties_policy:
+      policyAnswerFromHouseRules(safe, "parties") ||
+      "Parties and events aren’t allowed at any of our units.",
+    house_rules_summary: safe.houseRulesSummary || null,
     booking_url: safe.bookingUrl,
   };
 }
@@ -373,47 +283,39 @@ async function getPolicy(args, ctx) {
 export function createToolRegistry() {
   const tools = [
     {
-      name: "resolve_listing",
+      name: "search_listings",
       description:
-        "Resolve a listing id from a specific unit name or id the user already mentioned. Do not use for broad discovery requests.",
+        "Find units based on amenities, unit type, minimum sleeps, and pet-friendly preference.",
       schema: {
         type: "object",
         additionalProperties: false,
-        required: ["listing_query"],
         properties: {
-          listing_query: { type: "string", minLength: 2, maxLength: 120 },
+          amenityKeys: {
+            type: "array",
+            maxItems: 10,
+            items: { type: "string", minLength: 1, maxLength: 60 },
+          },
+          unitType: { type: "string", minLength: 1, maxLength: 40 },
+          sleeps: { type: "integer", minimum: 1, maximum: 20 },
+          wantsPetFriendly: { type: "boolean" },
         },
       },
       roleAllowlist: ["guest", "qa", "admin"],
       irreversible: false,
-      handler: resolveListingByIdOrQuery,
+      handler: searchListings,
     },
     {
-      name: "get_listing_summary",
-      description: "Get listing facts and summary for a specific listing id.",
+      name: "check_availability",
+      description:
+        "Check if a specific unit is available for an exact date range.",
       schema: {
         type: "object",
         additionalProperties: false,
-        required: ["listing_id"],
+        required: ["listingId", "startDate", "endDate"],
         properties: {
-          listing_id: { type: "string", pattern: "^\\d+$", minLength: 1, maxLength: 12 },
-        },
-      },
-      roleAllowlist: ["guest", "qa", "admin"],
-      irreversible: false,
-      handler: getListingSummary,
-    },
-    {
-      name: "check_listing_availability",
-      description: "Check if a specific listing is available for an exact date range.",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["listing_id", "start_date", "end_date"],
-        properties: {
-          listing_id: { type: "string", pattern: "^\\d+$", minLength: 1, maxLength: 12 },
-          start_date: { type: "string", format: "date" },
-          end_date: { type: "string", format: "date" },
+          listingId: { type: "string", pattern: "^\\d+$", minLength: 1, maxLength: 12 },
+          startDate: { type: "string", format: "date" },
+          endDate: { type: "string", format: "date" },
           nights: { type: "integer", minimum: 1, maximum: 5 },
         },
       },
@@ -422,77 +324,24 @@ export function createToolRegistry() {
       handler: checkListingAvailability,
     },
     {
-      name: "list_units",
+      name: "get_unit_details",
       description:
-        "List units filtered by amenities, capacity, pet policy, type, and optional availability range. Use for broad discovery and availability without a specific listing id.",
+        "Get policy or summary/fact-based information for a specific unit.",
       schema: {
         type: "object",
         additionalProperties: false,
+        required: ["listingId", "topic"],
         properties: {
-          unit_type: {
-            anyOf: [
-              { type: "null" },
-              {
-                type: "string",
-                enum: ["cabin", "suite", "lodge", "treehouse", "cottage", "tiny home"],
-              },
-            ],
-          },
-          amenity_keys: {
-            type: "array",
-            maxItems: 10,
-            items: {
-              type: "string",
-              enum: [
-                "hot tub",
-                "jacuzzi",
-                "pool",
-                "fireplace",
-                "sauna",
-                "wifi",
-                "kitchen",
-                "air conditioning",
-                "washing machine",
-                "free parking",
-              ],
-            },
-          },
-          pet_friendly: { type: "boolean" },
-          min_sleeps: { type: "integer", minimum: 1, maximum: 20 },
-          min_bedrooms: { type: "integer", minimum: 0, maximum: 10 },
-          min_bathrooms: { type: "integer", minimum: 0, maximum: 10 },
-          available_start_date: { type: "string", format: "date" },
-          available_end_date: { type: "string", format: "date" },
-          limit: { type: "integer", minimum: 1, maximum: 40 },
-        },
-      },
-      roleAllowlist: ["guest", "qa", "admin"],
-      irreversible: false,
-      handler: listUnits,
-    },
-    {
-      name: "get_policy",
-      description: "Get policy answers globally or for a specific listing.",
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["topic"],
-        properties: {
+          listingId: { type: "string", pattern: "^\\d+$", minLength: 1, maxLength: 12 },
           topic: {
             type: "string",
-            enum: ["pets", "smoking", "parties", "noise", "checkin", "checkout", "cancellation"],
-          },
-          listing_id: {
-            anyOf: [
-              { type: "null" },
-              { type: "string", pattern: "^\\d+$", minLength: 1, maxLength: 12 },
-            ],
+            enum: ["policy", "amenities", "location", "bedding", "summary"],
           },
         },
       },
       roleAllowlist: ["guest", "qa", "admin"],
       irreversible: false,
-      handler: getPolicy,
+      handler: getUnitDetails,
     },
   ];
 
