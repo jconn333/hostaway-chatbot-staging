@@ -579,3 +579,82 @@ test("orchestrator forces availability tool call when follow-up provides dates a
   assert.equal(seen.startDate, "2026-03-14");
   assert.equal(seen.endDate, "2026-03-16");
 });
+
+test("orchestrator executes search_available_units for inventory-wide date search", async () => {
+  const client = makeClient([
+    completionWithToolCall("search_available_units", {
+      startDate: "2026-03-14",
+      endDate: "2026-03-16",
+    }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      getListingsCached: async () => [
+        { id: 214151, name: "Red Fern Cabin" },
+        { id: 214152, name: "Water Lily Cabin" },
+      ],
+      fetchListingByIdCached: async (listingId) => ({
+        id: Number(listingId),
+        name: String(listingId) === "214151" ? "Red Fern Cabin" : "Water Lily Cabin",
+        listingAmenities: [],
+      }),
+      toSafeListingFacts: (l) => ({
+        id: l.id,
+        name: l.name,
+        bookingUrl: `https://book.amishcountrylodging.com/listings/${l.id}`,
+        amenities: [],
+      }),
+      fetchCalendarRange: async (listingId) => {
+        if (String(listingId) === "214151") {
+          return [{ date: "2026-03-14", isAvailable: 0, status: "reserved" }];
+        }
+        return [{ date: "2026-03-14", isAvailable: 1, status: "available" }];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Any units available March 14 to March 16?",
+    sessionId: "t-search-available-units",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(out.trace.toolCallCount, 1);
+  assert.equal(
+    out.trace.toolExecutions.some((e) => e.tool === "search_available_units" && e.ok === true),
+    true
+  );
+  assert.equal(out.route, "availability");
+});
+
+test("orchestrator does not force single-unit availability retry when user asks for other units", async () => {
+  const client = makeClient([completionWithText("I can check other units.")]);
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      extractDates: () => ({ start: "2026-03-14", end: "2026-03-16" }),
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Any other units for March 14 to March 16?",
+    sessionId: "t-no-force-when-other-units",
+    session: {
+      listingId: "214151",
+      listingName: "Red Fern Cabin",
+      lastIntent: "availability",
+    },
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "I can check other units.");
+  assert.equal(out.trace.toolCallCount, 0);
+  assert.equal(client.calls.length, 1);
+});

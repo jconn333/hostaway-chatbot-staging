@@ -287,6 +287,43 @@ async function getUnitDetails(args, ctx) {
   };
 }
 
+async function searchAvailableUnits(args, ctx) {
+  const runtime = await ensureHostawayContext(ctx);
+  const listings = runtime.listings || [];
+
+  const units = [];
+  for (const listing of listings) {
+    const listingId = String(listing.id);
+    const full = await ctx.fetchListingByIdCached(listingId, runtime.accessToken);
+    const safe = ctx.toSafeListingFacts(full, { audience: "postbooking" });
+    const days = await ctx.fetchCalendarRange(
+      listingId,
+      args.startDate,
+      args.endDate,
+      runtime.accessToken
+    );
+    const summary = summarizeAvailabilityWithAlternatives(days, args.startDate, args.endDate);
+    if (!summary?.available) continue;
+    units.push({
+      listing_id: listingId,
+      listing_name: safe.name,
+      sleeps: safe.sleeps ?? null,
+      bedrooms: safe.bedrooms ?? null,
+      bathrooms: safe.bathrooms ?? null,
+      booking_url: `${safe.bookingUrl}?start=${args.startDate}&end=${args.endDate}`,
+    });
+  }
+
+  return {
+    start_date: args.startDate,
+    end_date: args.endDate,
+    start_display: toDisplayDate(args.startDate),
+    end_display: toDisplayDate(args.endDate),
+    count: units.length,
+    units,
+  };
+}
+
 export function createToolRegistry() {
   const tools = [
     {
@@ -329,6 +366,23 @@ export function createToolRegistry() {
       roleAllowlist: ["guest", "qa", "admin"],
       irreversible: false,
       handler: checkListingAvailability,
+    },
+    {
+      name: "search_available_units",
+      description:
+        "Find all units that are available for an exact date range.",
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["startDate", "endDate"],
+        properties: {
+          startDate: { type: "string", format: "date" },
+          endDate: { type: "string", format: "date" },
+        },
+      },
+      roleAllowlist: ["guest", "qa", "admin"],
+      irreversible: false,
+      handler: searchAvailableUnits,
     },
     {
       name: "get_unit_details",

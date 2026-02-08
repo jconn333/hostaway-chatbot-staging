@@ -40,11 +40,18 @@ function buildClarificationQuestion(toolName, errors, options = {}) {
   if (toolName === "search_listings") {
     return "What filters should I use (guests, amenities, pet-friendly, or unit type)?";
   }
+  if (toolName === "search_available_units") {
+    if (msg.includes("startdate") || msg.includes("enddate")) {
+      return "What dates should I check across all units? Please share start and end dates (YYYY-MM-DD).";
+    }
+    return "What date range should I use to check other available units?";
+  }
   return "Could you clarify what you'd like me to check?";
 }
 
 function getRouteFromTools(toolNames = []) {
   if (toolNames.includes("check_availability")) return "availability";
+  if (toolNames.includes("search_available_units")) return "availability";
   if (toolNames.includes("search_listings")) return "amenity_inventory";
   if (toolNames.includes("get_unit_details")) return "summary";
   return "general";
@@ -98,6 +105,7 @@ function shouldForceAvailabilityToolCall(
 ) {
   const msg = normalizeMessage(message);
   if (!msg) return false;
+  if (isOtherUnitsRequest(msg)) return false;
 
   const asksAvailability = /\b(available|availability|open|booked|is .* available)\b/.test(msg);
   const hasExplicitDates = Boolean(explicitDates?.start && explicitDates?.end);
@@ -120,6 +128,14 @@ function shouldForceAvailabilityToolCall(
       msg
     );
   return hasListingSignal;
+}
+
+function isOtherUnitsRequest(message) {
+  const msg = normalizeMessage(message);
+  if (!msg) return false;
+  return /\b(other|another|any others|any other|different unit|different units|other units)\b/.test(
+    msg
+  );
 }
 
 function smallTalkFallbackReply(message) {
@@ -171,6 +187,10 @@ function normalizeToolArgs(toolName, parsed, schema) {
       petFriendly: "wantsPetFriendly",
       guestCount: "sleeps",
       guest_count: "sleeps",
+    },
+    search_available_units: {
+      start_date: "startDate",
+      end_date: "endDate",
     },
     get_unit_details: {
       listing_id: "listingId",
@@ -463,6 +483,11 @@ export function createModelFirstOrchestrator({
       listingName: session?.listingName || null,
       dates: session?.dates || null,
     };
+    if (isOtherUnitsRequest(message)) {
+      lockState.listing = null;
+      effectiveSession.listingId = null;
+      effectiveSession.listingName = null;
+    }
 
     if (explicitListing?.listingId) {
       effectiveSession.listingId = String(explicitListing.listingId);
@@ -739,6 +764,15 @@ export function createModelFirstOrchestrator({
         }
         if (toolName === "search_listings") {
           sessionPatch.inventoryFilters = result?.filters_applied || null;
+          sessionPatch.activeResultSet = {
+            listingIds: (result?.units || []).map((u) => String(u.listing_id)),
+          };
+        }
+        if (toolName === "search_available_units") {
+          sessionPatch.dates = {
+            start: result?.start_date || null,
+            end: result?.end_date || null,
+          };
           sessionPatch.activeResultSet = {
             listingIds: (result?.units || []).map((u) => String(u.listing_id)),
           };
