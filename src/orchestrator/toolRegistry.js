@@ -1,4 +1,4 @@
-import { hasAmenity } from "../lib/inventory.js";
+import { getCanonicalAmenity, hasAmenity } from "../lib/inventory.js";
 import {
   summarizeAvailabilityWithAlternatives,
   findAlternativeStays,
@@ -151,7 +151,14 @@ async function searchListings(args, ctx) {
   const listings = runtime.listings || [];
   const limit = 40;
   const amenityKeys = Array.isArray(args.amenityKeys)
-    ? args.amenityKeys.map((v) => String(v).toLowerCase())
+    ? Array.from(
+        new Set(
+          args.amenityKeys
+            .map((v) => getCanonicalAmenity(v))
+            .map((v) => String(v || "").toLowerCase().trim())
+            .filter(Boolean)
+        )
+      )
     : [];
   const unitType = args.unitType ? String(args.unitType).toLowerCase() : null;
   const minSleeps = Number.isFinite(args.sleeps) ? Number(args.sleeps) : null;

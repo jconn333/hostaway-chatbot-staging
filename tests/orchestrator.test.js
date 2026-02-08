@@ -539,3 +539,43 @@ test("orchestrator decrements param locks across non-explicit turns", async () =
   assert.equal(out.sessionPatch?.paramLocks?.listing?.turnsRemaining, 1);
   assert.equal(out.sessionPatch?.paramLocks?.dates?.turnsRemaining, 1);
 });
+
+test("orchestrator forces availability tool call when follow-up provides dates after availability intent", async () => {
+  const seen = { startDate: null, endDate: null, listingId: null };
+  const client = makeClient([
+    completionWithText("Thanks for the dates."),
+    completionWithToolCall("check_availability", { listingId: "214151" }),
+    completionWithText("ok"),
+  ]);
+
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      extractDates: () => ({ start: "2026-03-14", end: "2026-03-16" }),
+      fetchCalendarRange: async (listingId, startDate, endDate) => {
+        seen.listingId = String(listingId);
+        seen.startDate = String(startDate);
+        seen.endDate = String(endDate);
+        return [];
+      },
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "March 14 to March 16",
+    sessionId: "t-followup-dates-force-availability",
+    session: {
+      listingId: "214151",
+      listingName: "Red Fern Cabin",
+      lastIntent: "availability",
+    },
+    role: "guest",
+  });
+
+  assert.equal(out.reply, "ok");
+  assert.equal(out.trace.toolCallCount, 1);
+  assert.equal(seen.listingId, "214151");
+  assert.equal(seen.startDate, "2026-03-14");
+  assert.equal(seen.endDate, "2026-03-16");
+});

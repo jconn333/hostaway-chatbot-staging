@@ -92,17 +92,25 @@ function isSmallTalkTurn(message) {
   );
 }
 
-function shouldForceAvailabilityToolCall(message, { session = null, listingIdHint = null } = {}) {
+function shouldForceAvailabilityToolCall(
+  message,
+  { session = null, listingIdHint = null, explicitDates = null } = {}
+) {
   const msg = normalizeMessage(message);
   if (!msg) return false;
 
   const asksAvailability = /\b(available|availability|open|booked|is .* available)\b/.test(msg);
-  if (!asksAvailability) return false;
+  const hasExplicitDates = Boolean(explicitDates?.start && explicitDates?.end);
+  const followupCompletesAvailability =
+    String(session?.lastIntent || "").toLowerCase() === "availability" && hasExplicitDates;
+  if (!asksAvailability && !followupCompletesAvailability) return false;
 
   const hasDateSignal =
+    hasExplicitDates ||
     /\b(today|tonight|tomorrow|this weekend|next weekend|next friday|next saturday|next sunday|weekend|week|month)\b/.test(
       msg
-    ) || /\b\d{4}-\d{2}-\d{2}\b/.test(msg);
+    ) ||
+    /\b\d{4}-\d{2}-\d{2}\b/.test(msg);
   if (!hasDateSignal && !(session?.dates?.start && session?.dates?.end)) return false;
 
   const hasListingSignal =
@@ -532,15 +540,15 @@ export function createModelFirstOrchestrator({
           shouldForceAvailabilityToolCall(message, {
             session: effectiveSession,
             listingIdHint: listingIdHint || effectiveSession?.listingId || null,
+            explicitDates,
           })
         ) {
           forcedAvailabilityRetryUsed = true;
           messages.push({ role: "assistant", content: messageText(assistant) || "" });
+          const forcedUnitName = effectiveSession?.listingName || "the selected unit";
           messages.push({
             role: "system",
-            content:
-              "The user asked a listing-specific availability question. " +
-              "Do not answer yet. Call check_availability with exact listingId, startDate, and endDate first.",
+            content: `The user has provided the dates for the ${forcedUnitName} availability check. Call check_availability now.`,
           });
           continue;
         }
