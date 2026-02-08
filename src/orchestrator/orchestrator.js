@@ -136,7 +136,9 @@ function maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps, session
       return next;
     }
   }
-  if (!next.startDate && !next.endDate && session?.dates?.start && session?.dates?.end) {
+  const missingStart = !next.startDate;
+  const missingEnd = !next.endDate;
+  if ((missingStart || missingEnd) && session?.dates?.start && session?.dates?.end) {
     next.startDate = String(session.dates.start);
     next.endDate = String(session.dates.end);
   }
@@ -241,6 +243,71 @@ async function resolveListingIdFromMessage(message, ctx) {
   };
 }
 
+async function resolveListingIdFromMessageLoose(message, ctx) {
+  const finder =
+    ctx?.findListingIdFromMessage ||
+    ctx?.helpers?.findListingIdFromMessage ||
+    ctx?.findListingIdFromMessageStrong ||
+    ctx?.helpers?.findListingIdFromMessageStrong;
+  if (typeof finder !== "function") return { listingId: null, listingName: null };
+
+  if (!ctx.__runtime) ctx.__runtime = {};
+  if (!ctx.__runtime.accessToken && typeof ctx.getHostawayAccessToken === "function") {
+    const tokenData = await ctx.getHostawayAccessToken();
+    ctx.__runtime.accessToken =
+      typeof tokenData === "string"
+        ? tokenData
+        : tokenData?.access_token || tokenData?.token || null;
+  }
+  if (!ctx.__runtime.listings && typeof ctx.getListingsCached === "function" && ctx.__runtime.accessToken) {
+    ctx.__runtime.listings = await ctx.getListingsCached(ctx.__runtime.accessToken);
+  }
+
+  const listings = Array.isArray(ctx.__runtime.listings) ? ctx.__runtime.listings : [];
+  const resolvedId = finder(String(message || ""), listings);
+  if (!resolvedId) return { listingId: null, listingName: null };
+  const hit = listings.find((l) => String(l.id) === String(resolvedId));
+  return {
+    listingId: String(resolvedId),
+    listingName: hit?.name || hit?.internalListingName || null,
+  };
+}
+
+function normalizeParamLocks(paramLocks) {
+  const src = paramLocks && typeof paramLocks === "object" ? paramLocks : {};
+  const listing =
+    src?.listing &&
+    typeof src.listing === "object" &&
+    src.listing.listingId != null &&
+    Number(src.listing.turnsRemaining) > 0
+      ? {
+          listingId: String(src.listing.listingId),
+          listingName: src.listing.listingName || null,
+          turnsRemaining: Number(src.listing.turnsRemaining),
+        }
+      : null;
+  const dates =
+    src?.dates &&
+    typeof src.dates === "object" &&
+    src.dates.start &&
+    src.dates.end &&
+    Number(src.dates.turnsRemaining) > 0
+      ? {
+          start: String(src.dates.start),
+          end: String(src.dates.end),
+          turnsRemaining: Number(src.dates.turnsRemaining),
+        }
+      : null;
+  return { listing, dates };
+}
+
+function hasExplicitDateMention(message, deps) {
+  if (typeof deps?.extractDates !== "function") return null;
+  const extracted = deps.extractDates(message);
+  if (!extracted?.start || !extracted?.end) return null;
+  return { start: String(extracted.start), end: String(extracted.end) };
+}
+
 async function maybeInjectListingId({
   toolName,
   parsed,
@@ -306,6 +373,7 @@ export function createModelFirstOrchestrator({
   if (!client) throw new Error("createModelFirstOrchestrator requires OpenAI client");
   if (!deps) throw new Error("createModelFirstOrchestrator requires deps");
 
+  const PARAM_LOCK_TURNS = 3;
   const registry = createToolRegistry();
   const chatTools = toChatTools(registry.openaiTools);
 
@@ -356,13 +424,69 @@ export function createModelFirstOrchestrator({
       sessionId,
       listingIdHint: listingIdHint ? String(listingIdHint) : null,
     };
+    const applyLocksToPatch = (patch) => {
+      if (patch?.listingId) {
+        lockState.listing = {
+          listingId: String(patch.listingId),
+          listingName: patch.listingName || lockState.listing?.listingName || null,
+          turnsRemaining: PARAM_LOCK_TURNS,
+        };
+      }
+      if (patch?.dates?.start && patch?.dates?.end) {
+        lockState.dates = {
+          start: String(patch.dates.start),
+          end: String(patch.dates.end),
+          turnsRemaining: PARAM_LOCK_TURNS,
+        };
+      }
+      patch.paramLocks = lockState;
+    };
 
     const todayIso =
       typeof deps?.getTodayIso === "function"
         ? String(deps.getTodayIso() || "")
         : new Date().toISOString().slice(0, 10);
+    const explicitListing = await resolveListingIdFromMessageLoose(message, toolContext);
+    const explicitDates = hasExplicitDateMention(message, deps);
+    const lockState = normalizeParamLocks(session?.paramLocks);
+    const effectiveSession = {
+      ...(session || {}),
+      listingId: session?.listingId || null,
+      listingName: session?.listingName || null,
+      dates: session?.dates || null,
+    };
+
+    if (explicitListing?.listingId) {
+      effectiveSession.listingId = String(explicitListing.listingId);
+      effectiveSession.listingName = explicitListing.listingName || effectiveSession.listingName || null;
+      lockState.listing = {
+        listingId: effectiveSession.listingId,
+        listingName: effectiveSession.listingName,
+        turnsRemaining: PARAM_LOCK_TURNS,
+      };
+    } else if (lockState.listing?.turnsRemaining > 0 && lockState.listing?.listingId) {
+      effectiveSession.listingId = String(lockState.listing.listingId);
+      if (lockState.listing.listingName) effectiveSession.listingName = lockState.listing.listingName;
+      lockState.listing.turnsRemaining -= 1;
+      if (lockState.listing.turnsRemaining <= 0) lockState.listing = null;
+    }
+
+    if (explicitDates?.start && explicitDates?.end) {
+      effectiveSession.dates = { start: explicitDates.start, end: explicitDates.end };
+      lockState.dates = {
+        start: explicitDates.start,
+        end: explicitDates.end,
+        turnsRemaining: PARAM_LOCK_TURNS,
+      };
+    } else if (lockState.dates?.turnsRemaining > 0 && lockState.dates?.start && lockState.dates?.end) {
+      effectiveSession.dates = { start: lockState.dates.start, end: lockState.dates.end };
+      lockState.dates.turnsRemaining -= 1;
+      if (lockState.dates.turnsRemaining <= 0) lockState.dates = null;
+    }
+    toolContext.session = effectiveSession;
+
     const contextText = buildOrchestratorContext({
-      session,
+      session: effectiveSession,
       userRole: normalizedRole,
       nowIso: new Date().toISOString(),
       todayIso,
@@ -381,6 +505,13 @@ export function createModelFirstOrchestrator({
       { role: "user", content: String(message || "") },
     ];
     const sessionPatch = {};
+    if (explicitListing?.listingId) {
+      sessionPatch.listingId = String(explicitListing.listingId);
+      if (explicitListing.listingName) sessionPatch.listingName = explicitListing.listingName;
+    }
+    if (explicitDates?.start && explicitDates?.end) {
+      sessionPatch.dates = { start: explicitDates.start, end: explicitDates.end };
+    }
     const toolNamesUsed = [];
     let executionFailures = 0;
     let forcedAvailabilityRetryUsed = false;
@@ -398,7 +529,10 @@ export function createModelFirstOrchestrator({
         if (
           !chatOnlyMode &&
           !forcedAvailabilityRetryUsed &&
-          shouldForceAvailabilityToolCall(message, { session, listingIdHint })
+          shouldForceAvailabilityToolCall(message, {
+            session: effectiveSession,
+            listingIdHint: listingIdHint || effectiveSession?.listingId || null,
+          })
         ) {
           forcedAvailabilityRetryUsed = true;
           messages.push({ role: "assistant", content: messageText(assistant) || "" });
@@ -415,6 +549,7 @@ export function createModelFirstOrchestrator({
         if (chatOnlyMode && /^which unit are you asking about\?/i.test(reply)) {
           reply = smallTalkFallbackReply(message);
         }
+        applyLocksToPatch(sessionPatch);
         trace.route = getRouteFromTools(toolNamesUsed);
         logger("orchestrator_turn_complete", {
           sessionId,
@@ -463,6 +598,7 @@ export function createModelFirstOrchestrator({
 
         if (trace.toolCallCount > maxToolCalls) {
           trace.failureReason = "max_tool_calls_exceeded";
+          applyLocksToPatch(sessionPatch);
           return {
             reply: "I need one specific detail to continue. Which unit and dates should I check next?",
             route: "clarification",
@@ -494,6 +630,7 @@ export function createModelFirstOrchestrator({
         if (parsed.__invalid) {
           trace.validation.push({ tool: toolName, ok: false, reason: parsed.__invalid });
           trace.clarificationAsked = true;
+          applyLocksToPatch(sessionPatch);
           return {
             reply: buildClarificationQuestion(toolName, [parsed.__invalid]),
             route: "clarification",
@@ -508,12 +645,12 @@ export function createModelFirstOrchestrator({
           toolName,
           parsed,
           message,
-          session,
-          listingIdHint,
+          session: effectiveSession,
+          listingIdHint: listingIdHint || effectiveSession?.listingId || null,
           toolContext,
         });
         parsed = listingResolution.parsed;
-        parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps, session);
+        parsed = maybeNormalizeAvailabilityArgs(toolName, parsed, message, deps, effectiveSession);
         parsed = normalizeToolArgs(toolName, parsed, tool.schema);
         const validation = validateArgs(tool.schema, parsed);
         const boundErrors = validateAvailabilityDateBounds(toolName, parsed, deps);
@@ -531,6 +668,7 @@ export function createModelFirstOrchestrator({
 
         if (!validation.ok) {
           trace.clarificationAsked = true;
+          applyLocksToPatch(sessionPatch);
           return {
             reply: buildClarificationQuestion(toolName, validation.errors, {
               unresolvedListingName: listingResolution.unresolvedListingName,
@@ -568,6 +706,7 @@ export function createModelFirstOrchestrator({
           });
           if (executionFailures >= maxExecutionFailures) {
             trace.failureReason = "circuit_breaker_open";
+            applyLocksToPatch(sessionPatch);
             return {
               reply: "I’m having trouble reaching one of my data tools right now. Please try again in a moment.",
               route: "error",
@@ -603,6 +742,7 @@ export function createModelFirstOrchestrator({
           content: JSON.stringify({ ok: true, result }),
         });
       }
+      applyLocksToPatch(sessionPatch);
     }
   }
 

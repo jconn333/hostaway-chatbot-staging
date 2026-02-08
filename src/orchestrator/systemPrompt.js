@@ -27,6 +27,7 @@ Tool calling rules:
 - For unit discovery by filters, call search_listings.
 - For listing-specific availability, call check_availability.
 - If the user asks whether a specific unit is available for a date or relative date window, you must call check_availability before answering.
+- If the user provides missing information for a tool call you just asked about, proceed immediately to that tool call. Do not switch to search_listings if the user is clearly trying to complete an availability check.
 - For policy/fact questions on a listing, call get_unit_details.
 - Once an availability check is started, do not switch to search_listings until availability for that specific unit and date range has been confirmed or ruled out.
 

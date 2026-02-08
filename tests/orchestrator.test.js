@@ -492,3 +492,50 @@ test("orchestrator retries once and forces tool call for listing availability pr
   assert.equal(seen.startDate, "2026-02-13");
   assert.equal(seen.endDate, "2026-02-15");
 });
+
+test("orchestrator pre-resolves listing id into model session context before first completion", async () => {
+  const client = makeClient([completionWithText("ok")]);
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps({
+      getListingsCached: async () => [{ id: 214151, name: "Red Fern Cabin" }],
+      findListingIdFromMessage: () => "214151",
+    }),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Is Red Fern Cabin available?",
+    sessionId: "t-pre-llm-listing-context",
+    session: {},
+    role: "guest",
+  });
+
+  assert.equal(out.sessionPatch?.listingId, "214151");
+  const firstSystem = String(client.calls[0]?.messages?.[0]?.content || "");
+  assert.match(firstSystem, /"listing_id": "214151"/);
+});
+
+test("orchestrator decrements param locks across non-explicit turns", async () => {
+  const client = makeClient([completionWithText("ok")]);
+  const orchestrator = createModelFirstOrchestrator({
+    client,
+    model: "gpt-4o-mini",
+    deps: makeDeps(),
+  });
+
+  const out = await orchestrator.runTurn({
+    message: "Thanks, got it",
+    sessionId: "t-param-lock-decrement",
+    session: {
+      paramLocks: {
+        listing: { listingId: "214151", listingName: "Red Fern Cabin", turnsRemaining: 2 },
+        dates: { start: "2026-02-13", end: "2026-02-15", turnsRemaining: 2 },
+      },
+    },
+    role: "guest",
+  });
+
+  assert.equal(out.sessionPatch?.paramLocks?.listing?.turnsRemaining, 1);
+  assert.equal(out.sessionPatch?.paramLocks?.dates?.turnsRemaining, 1);
+});
