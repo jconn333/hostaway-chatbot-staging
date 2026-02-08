@@ -188,6 +188,33 @@ export function summarizeAvailabilityWithAlternatives(calendarDays, start, end) 
   const daysArr = Array.isArray(calendarDays) ? calendarDays : [];
   const blocked = daysArr.filter((d) => d?.isAvailable === 0);
 
+  const requestedNights = (() => {
+    const [ys, ms, ds] = String(start || "").split("-").map(Number);
+    const [ye, me, de] = String(end || "").split("-").map(Number);
+    if (!ys || !ms || !ds || !ye || !me || !de) return 0;
+    const a = Date.UTC(ys, ms - 1, ds);
+    const b = Date.UTC(ye, me - 1, de);
+    return Math.max(0, Math.round((b - a) / 86400000));
+  })();
+  const highestMinimumStay = daysArr
+    .filter((d) => {
+      const iso = String(d?.date || "");
+      return iso >= start && iso < end;
+    })
+    .reduce((max, d) => {
+      const m = Number(d?.minimumStay || 0);
+      return Number.isFinite(m) && m > max ? m : max;
+    }, 0);
+
+  if (blocked.length === 0 && highestMinimumStay > 0 && requestedNights < highestMinimumStay) {
+    return {
+      available: false,
+      reasonCode: "minimum_stay",
+      suggestedStart: start,
+      message: `No — this unit requires a minimum stay of ${highestMinimumStay} nights for those dates.`,
+    };
+  }
+
   if (blocked.length === 0) {
     return {
       available: true,

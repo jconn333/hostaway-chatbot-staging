@@ -52,6 +52,20 @@ test("summarizeAvailabilityWithAlternatives returns available reason", () => {
   assert.equal(out.reasonCode, "available");
 });
 
+test("summarizeAvailabilityWithAlternatives enforces highest minimum stay in requested range", () => {
+  const out = summarizeAvailabilityWithAlternatives(
+    [
+      { date: "2026-03-01", isAvailable: 1, status: "available", minimumStay: 3 },
+      { date: "2026-03-02", isAvailable: 1, status: "available", minimumStay: 2 },
+    ],
+    "2026-03-01",
+    "2026-03-02"
+  );
+  assert.equal(out.available, false);
+  assert.equal(out.reasonCode, "minimum_stay");
+  assert.equal(out.message, "No — this unit requires a minimum stay of 3 nights for those dates.");
+});
+
 test("findAlternativeStays returns closest matching windows", () => {
   const days = [
     { date: "2026-03-01", isAvailable: 0, status: "reserved" },
